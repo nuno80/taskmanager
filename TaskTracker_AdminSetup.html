@@ -280,9 +280,29 @@
 
     <!-- VISTA TABELLA -->
     <div id="view-list" class="hidden">
+      <div id="batch-action-bar" class="batch-bar hidden">
+        <span class="batch-count"><b id="batch-sel-count">0</b> pratiche selezionate</span>
+        <div class="batch-controls">
+          <select id="batch-status-select" class="pill-ctrl" title="Nuovo stato per le pratiche selezionate">
+            <option value="">Cambia Stato...</option>
+            <option value="Da iniziare">Da iniziare</option>
+            <option value="In lavorazione">In lavorazione</option>
+            <option value="In verifica intermedia">In verifica intermedia</option>
+            <option value="Pronto per consegna">Pronto per consegna</option>
+            <option value="Completato">Completato</option>
+            <option value="Annullato">Annullato</option>
+          </select>
+          <button type="button" id="btn-batch-apply-status" class="std-btn btn-primary" style="padding:5px 10px;">Applica Stato</button>
+          <input type="date" id="batch-date-input" class="pill-ctrl" title="Nuova scadenza per le pratiche selezionate">
+          <button type="button" id="btn-batch-apply-date" class="std-btn btn-primary" style="padding:5px 10px;">Sposta Scadenza</button>
+          <button type="button" id="btn-batch-delete" class="std-btn btn-danger" style="padding:5px 10px;">🗑️ Cestino</button>
+          <button type="button" id="btn-batch-clear" class="std-btn" style="padding:5px 10px;">✕ Annulla</button>
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
+            <th style="width:32px; text-align:center;"><input type="checkbox" id="tbl-select-all" title="Seleziona/Deseleziona tutte le pratiche modificabili"></th>
             <th class="sortable" data-sort="code">Codice <span class="sort-ind">⇅</span></th>
             <th class="sortable" data-sort="ato">ATO <span class="sort-ind">⇅</span></th>
             <th class="sortable" data-sort="due">Scadenza <span class="sort-ind">⇅</span></th>
@@ -342,6 +362,7 @@
       </div>
 
       <div class="stats-kpi-grid" id="stats-kpis"></div>
+      <div class="stats-kpi-grid stats-kpi-ops" id="stats-kpis-ops"></div>
 
       <div class="stats-charts-grid">
         <div class="chart-panel">
@@ -551,6 +572,7 @@
         <input type="checkbox" id="t-mid-done"> Verifica intermedia (-7gg) effettuata
       </label>
       <div style="display:flex; gap:8px;">
+        <button type="button" id="btn-duplicate-in-modal" class="std-btn hidden" title="Crea una nuova pratica copiando i dati di questa">📋 Duplica</button>
         <button type="button" id="btn-delete-in-modal" class="std-btn btn-danger hidden">🗑 Elimina</button>
         <button type="button" id="btn-cancel-modal" class="std-btn" title="Chiudi (ESC)">Chiudi</button>
         <button type="button" id="btn-save-task" class="std-btn btn-primary">Salva Pratica</button>

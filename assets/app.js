@@ -320,6 +320,8 @@ function openModal(id, templatePreset) {
   document.getElementById('modal-readonly-tag').classList.toggle('hidden', editable);
   document.getElementById('btn-save-task').classList.toggle('hidden', !editable);
   document.getElementById('btn-delete-in-modal').classList.toggle('hidden', !(t && editable));
+  const dupBtn = document.getElementById('btn-duplicate-in-modal');
+  if (dupBtn) dupBtn.classList.toggle('hidden', !t);
 
   document.getElementById('t-id').value = t ? t.id : '';
   document.getElementById('t-code').value = t ? (t.code || '') : '';
@@ -392,6 +394,59 @@ function openModal(id, templatePreset) {
 function closeModal() {
   editingTaskLoadedUpdatedAt = null;
   document.getElementById('modal').classList.add('hidden');
+}
+
+function duplicateCurrentModalTask() {
+  const id = document.getElementById('t-id').value;
+  const orig = tasks.find(function(x) { return x.id === id; });
+  if (!orig) return;
+
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  const targetSec = isAdmin ? sanitizeSection(orig.sec) : sanitizeSection(currentUser ? currentUser.sec : 'NATO');
+
+  editingTaskLoadedUpdatedAt = null;
+  document.getElementById('t-id').value = '';
+  document.getElementById('t-code').value = '';
+  document.getElementById('modal-title').textContent = 'Nuova Pratica (Copia di ' + (orig.code || 'Pratica') + ')';
+  document.getElementById('modal-readonly-tag').classList.add('hidden');
+  document.getElementById('btn-save-task').classList.remove('hidden');
+  document.getElementById('btn-delete-in-modal').classList.add('hidden');
+  document.getElementById('btn-duplicate-in-modal').classList.add('hidden');
+  document.getElementById('t-audit-box').classList.add('hidden');
+
+  ['t-ato','t-sec','t-tipo','t-title','t-prio','t-class','t-dest','t-ins-date','t-pcn-out','t-pcn-in','t-date','t-time','t-status','t-prot','t-link','t-notes','t-mid-done'].forEach(function(fid) {
+    document.getElementById(fid).disabled = (fid === 't-sec' && !isAdmin);
+  });
+
+  document.getElementById('t-sec').value = targetSec;
+  document.getElementById('t-tipo').value = orig.tipo || 'Appunto';
+  document.getElementById('t-prio').value = orig.prio || 'Ordinario';
+  document.getElementById('t-class').value = orig.classif || 'Non Classificato';
+  document.getElementById('t-dest').value = normalizeApprover(orig.dest);
+  document.getElementById('t-notes').value = orig.notes || '';
+  document.getElementById('t-link').value = orig.link || '';
+  document.getElementById('t-title').value = (orig.title || '') + ' (Copia)';
+
+  document.getElementById('t-ato').value = '';
+  document.getElementById('t-prot').value = '';
+  document.getElementById('t-pcn-out').value = '';
+  document.getElementById('t-pcn-in').value = '';
+  document.getElementById('t-date').value = '';
+  document.getElementById('t-time').value = '12:00';
+  document.getElementById('t-mid-done').checked = false;
+  document.getElementById('t-ins-date').value = toISODateLocal(new Date());
+  document.getElementById('t-status').value = 'Da iniziare';
+
+  modalChecklist = Array.isArray(orig.checklist)
+    ? orig.checklist.map(function(c) { return { text: String(c.text || ''), done: false }; })
+    : [];
+
+  renderModalChecklist(true);
+  setModalTab('details');
+  loadAndRenderTaskHistory(null);
+  updateCodePreviewForNewTask();
+  updateModalDuplicateWarning();
+  showToast('📋 Pratica duplicata in bozza: verifica i campi e premi Salva');
 }
 
 function closeAllModals() {
@@ -523,6 +578,13 @@ async function verifyNoExternalConflict(taskId, expectedUpdatedAt, reopenOnCance
   return true;
 }
 
+function computeCompletedAt(oldTask, newStatus, nowISO) {
+  const isNowDone = String(newStatus || '').trim().toLowerCase().startsWith('completat');
+  if (!isNowDone) return '';
+  if (oldTask && oldTask.completedAt) return oldTask.completedAt;
+  return nowISO;
+}
+
 async function saveTask() {
   const title = document.getElementById('t-title').value.trim();
   if (!title) { alert('Inserisci l\'Oggetto della pratica.'); return; }
@@ -562,6 +624,7 @@ async function saveTask() {
     status: document.getElementById('t-status').value, prot: document.getElementById('t-prot').value.trim(),
     link: document.getElementById('t-link').value.trim(), notes: document.getElementById('t-notes').value.trim(),
     midDone: document.getElementById('t-mid-done').checked,
+    completedAt: computeCompletedAt(oldTask, document.getElementById('t-status').value, nowISO),
     checklist: cleanChecklist,
     createdBy: oldTask ? (oldTask.createdBy || userLabel) : userLabel,
     createdAt: oldTask ? (oldTask.createdAt || nowISO) : nowISO,
@@ -653,6 +716,120 @@ async function deleteTaskById(id) {
   populateYearLists();
   closeModal();
   render();
+}
+
+async function applyBatchStatus() {
+  const selectEl = document.getElementById('batch-status-select');
+  const newStatus = selectEl ? selectEl.value : '';
+  if (!newStatus) { alert('Seleziona uno stato da applicare.'); return; }
+
+  const targets = tasks.filter(function(t) { return selectedTaskIds.has(t.id) && canEditTask(t); });
+  if (!targets.length) { alert('Nessuna pratica modificabile selezionata.'); return; }
+
+  if (!confirm('Aggiornare lo stato a "' + newStatus + '" per ' + targets.length + ' pratiche selezionate?')) return;
+
+  isSavingTask = true;
+  try {
+    const nowISO = new Date().toISOString();
+    const userLabel = currentUser ? (currentUser.name + ' (' + currentUser.sec + ')') : 'Utente';
+    let nextTasks = tasks.slice();
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const oldStatus = t.status;
+      const updated = Object.assign({}, t, {
+        status: newStatus,
+        completedAt: computeCompletedAt(t, newStatus, nowISO),
+        updatedBy: userLabel,
+        updatedAt: nowISO
+      });
+      nextTasks = nextTasks.map(function(x) { return x.id === t.id ? updated : x; });
+      await saveSingleTask(updated, nextTasks);
+      tasks = nextTasks;
+      try {
+        await appendAuditLog('MODIFICATO', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Stato (Batch): ' + oldStatus + ' → ' + newStatus);
+      } catch (e) {}
+    }
+  } finally {
+    isSavingTask = false;
+  }
+  selectedTaskIds.clear();
+  if (selectEl) selectEl.value = '';
+  populateYearLists();
+  render();
+  showToast('✓ Stato aggiornato su ' + targets.length + ' pratiche');
+}
+
+async function applyBatchDate() {
+  const dateInput = document.getElementById('batch-date-input');
+  const newDate = dateInput ? dateInput.value : '';
+  if (!newDate) { alert('Seleziona una data di scadenza.'); return; }
+
+  const targets = tasks.filter(function(t) { return selectedTaskIds.has(t.id) && canEditTask(t); });
+  if (!targets.length) { alert('Nessuna pratica modificabile selezionata.'); return; }
+
+  if (!confirm('Spostare la scadenza al ' + formatD(newDate) + ' per ' + targets.length + ' pratiche selezionate?')) return;
+
+  isSavingTask = true;
+  try {
+    const nowISO = new Date().toISOString();
+    const userLabel = currentUser ? (currentUser.name + ' (' + currentUser.sec + ')') : 'Utente';
+    let nextTasks = tasks.slice();
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const oldDate = t.date || '-';
+      const updated = Object.assign({}, t, {
+        date: newDate,
+        updatedBy: userLabel,
+        updatedAt: nowISO
+      });
+      nextTasks = nextTasks.map(function(x) { return x.id === t.id ? updated : x; });
+      await saveSingleTask(updated, nextTasks);
+      tasks = nextTasks;
+      try {
+        await appendAuditLog('SPOSTATO', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Scadenza (Batch): ' + oldDate + ' → ' + newDate);
+      } catch (e) {}
+    }
+  } finally {
+    isSavingTask = false;
+  }
+  selectedTaskIds.clear();
+  if (dateInput) dateInput.value = '';
+  populateYearLists();
+  render();
+  showToast('✓ Scadenza aggiornata su ' + targets.length + ' pratiche');
+}
+
+async function applyBatchSoftDelete() {
+  const targets = tasks.filter(function(t) { return selectedTaskIds.has(t.id) && canEditTask(t); });
+  if (!targets.length) { alert('Nessuna pratica modificabile selezionata.'); return; }
+
+  if (!confirm('Spostare nel Cestino ' + targets.length + ' pratiche selezionate? (L\'Amministratore potrà ripristinarle)')) return;
+
+  isSavingTask = true;
+  try {
+    const nowISO = new Date().toISOString();
+    const userLabel = currentUser ? (currentUser.name + ' (' + currentUser.sec + ')') : 'Utente';
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      t.deleted = true;
+      t.deletedBy = userLabel;
+      t.deletedAt = nowISO;
+      tasks = tasks.filter(function(x) { return x.id !== t.id; });
+      deletedTasks.unshift(t);
+      await saveSingleTask(t, tasks.concat(deletedTasks));
+      try {
+        await appendAuditLog('ELIMINATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Spostata nel Cestino (Batch)');
+      } catch (err) {
+        console.warn('Errore log cestino batch:', err);
+      }
+    }
+  } finally {
+    isSavingTask = false;
+  }
+  selectedTaskIds.clear();
+  populateYearLists();
+  render();
+  showToast('🗑️ ' + targets.length + ' pratiche spostate nel Cestino');
 }
 
 /* -------------------------------------------------------------------------
@@ -1677,6 +1854,52 @@ function initApp() {
     const id = document.getElementById('t-id').value;
     if (id) deleteTaskById(id);
   });
+  const btnDupInModal = document.getElementById('btn-duplicate-in-modal');
+  if (btnDupInModal) btnDupInModal.addEventListener('click', duplicateCurrentModalTask);
+
+  const tblSelectAll = document.getElementById('tbl-select-all');
+  if (tblSelectAll) {
+    tblSelectAll.addEventListener('change', function() {
+      const filtered = getFilteredTasks();
+      const editableIds = filtered.filter(canEditTask).map(function(t) { return t.id; });
+      if (this.checked) {
+        editableIds.forEach(function(id) { selectedTaskIds.add(id); });
+      } else {
+        editableIds.forEach(function(id) { selectedTaskIds.delete(id); });
+      }
+      renderTable(filtered);
+    });
+  }
+
+  const tblBody = document.getElementById('table-body');
+  if (tblBody) {
+    tblBody.addEventListener('change', function(e) {
+      const chk = e.target.closest('.tbl-row-chk');
+      if (!chk) return;
+      const id = chk.getAttribute('data-chk-id');
+      if (!id) return;
+      if (chk.checked) selectedTaskIds.add(id);
+      else selectedTaskIds.delete(id);
+      updateBatchBarUI(getFilteredTasks());
+    });
+  }
+
+  const btnBatchStatus = document.getElementById('btn-batch-apply-status');
+  if (btnBatchStatus) btnBatchStatus.addEventListener('click', applyBatchStatus);
+
+  const btnBatchDate = document.getElementById('btn-batch-apply-date');
+  if (btnBatchDate) btnBatchDate.addEventListener('click', applyBatchDate);
+
+  const btnBatchDelete = document.getElementById('btn-batch-delete');
+  if (btnBatchDelete) btnBatchDelete.addEventListener('click', applyBatchSoftDelete);
+
+  const btnBatchClear = document.getElementById('btn-batch-clear');
+  if (btnBatchClear) {
+    btnBatchClear.addEventListener('click', function() {
+      selectedTaskIds.clear();
+      renderTable(getFilteredTasks());
+    });
+  }
 
   document.getElementById('btn-prev-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() - 7); else calDate = addMonthsSafe(calDate.getFullYear(), calDate.getMonth(), 1, -1); render(); });
   document.getElementById('btn-next-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() + 7); else calDate = addMonthsSafe(calDate.getFullYear(), calDate.getMonth(), 1, 1); render(); });
@@ -1767,10 +1990,12 @@ function initApp() {
       if (!proceed) return;
 
       const oldStatus = t.status;
+      const nowISO = new Date().toISOString();
       const updated = Object.assign({}, t, {
         status: newStatus,
+        completedAt: computeCompletedAt(t, newStatus, nowISO),
         updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
-        updatedAt: new Date().toISOString()
+        updatedAt: nowISO
       });
       const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
       isSavingTask = true;

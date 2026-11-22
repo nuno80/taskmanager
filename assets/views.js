@@ -22,6 +22,7 @@ let calDate = new Date();
 let calMode = 'month';
 let hideCompleted = true;
 let sortDirection = 'asc';  // 'asc' | 'desc'
+let selectedTaskIds = new Set();
 
 function getActiveSectionFilter() {
   const secEl = document.getElementById('f-sec');
@@ -398,6 +399,29 @@ function renderKanban(list) {
   }).join('');
 }
 
+function updateBatchBarUI(visibleList) {
+  const currentList = Array.isArray(visibleList) ? visibleList : getFilteredTasks();
+  const editableVisibleIds = currentList.filter(canEditTask).map(function(t) { return t.id; });
+
+  const activeIdsSet = new Set(tasks.filter(canEditTask).map(function(t) { return t.id; }));
+  selectedTaskIds.forEach(function(id) {
+    if (!activeIdsSet.has(id)) selectedTaskIds.delete(id);
+  });
+
+  const bar = document.getElementById('batch-action-bar');
+  if (bar) bar.classList.toggle('hidden', selectedTaskIds.size === 0);
+  const countEl = document.getElementById('batch-sel-count');
+  if (countEl) countEl.textContent = selectedTaskIds.size;
+
+  const selectAll = document.getElementById('tbl-select-all');
+  if (selectAll) {
+    const allChecked = editableVisibleIds.length > 0 && editableVisibleIds.every(function(id) { return selectedTaskIds.has(id); });
+    const someChecked = !allChecked && editableVisibleIds.some(function(id) { return selectedTaskIds.has(id); });
+    selectAll.checked = allChecked;
+    selectAll.indeterminate = someChecked;
+  }
+}
+
 function renderTable(list) {
   updateTableSortIndicators();
   document.getElementById('table-body').innerHTML = list.map(function(t) {
@@ -408,6 +432,7 @@ function renderTable(list) {
       ? '<button type="button" class="std-btn" style="padding:3px 7px;" data-action="edit" data-id="' + safeId + '">✏️</button> <button type="button" class="std-btn btn-danger" style="padding:3px 7px;" data-action="delete" data-id="' + safeId + '">🗑</button>'
       : '<button type="button" class="std-btn" style="padding:3px 7px;" data-action="edit" data-id="' + safeId + '">👁️</button>';
     return '<tr>' +
+      '<td style="text-align:center;"><input type="checkbox" class="tbl-row-chk" data-chk-id="' + safeId + '"' + (selectedTaskIds.has(t.id) ? ' checked' : '') + (editable ? '' : ' disabled title="Sola lettura (altra sezione)"') + '></td>' +
       '<td><span class="code-badge">' + escapeHtml(t.code || '-') + '</span></td>' +
       '<td><b>' + escapeHtml(t.ato || '-') + '</b></td>' +
       '<td>' + ev.badge + '<br><small>' + (t.date ? escapeHtml(formatD(t.date) + ' ' + (t.time || '')) : '') + '</small></td>' +
@@ -424,6 +449,7 @@ function renderTable(list) {
       '<td style="white-space:nowrap;">' + actions + '</td>' +
     '</tr>';
   }).join('');
+  updateBatchBarUI(list);
 }
 
 // Rendering selettivo: rigenera solo la vista attualmente attiva
@@ -592,6 +618,67 @@ function renderStats() {
     '<div class="kpi-card" style="border-top-color:#22c55e;"><div class="kpi-label">Tasso Completamento</div><div class="kpi-val" style="color:#16a34a;">' + compPct + '%</div><div class="kpi-sub">' + done + ' completate su ' + validBase + ' valide (' + canc + ' ann.)</div></div>' +
     '<div class="kpi-card" style="border-top-color:#2589f5;"><div class="kpi-label">Attive / In Corso</div><div class="kpi-val" style="color:#2589f5;">' + active + '</div><div class="kpi-sub">Pratiche aperte da gestire</div></div>' +
     '<div class="kpi-card" style="border-top-color:#ef4444;"><div class="kpi-label">Critiche / ≤ 48h</div><div class="kpi-val" style="color:#ef4444;">' + critCount + '</div><div class="kpi-sub">Scadute o in consegna entro 48h</div></div>';
+
+  // KPI Operativi Pacchetto 3: Tempi Medi & Puntualità
+  let evasionSum = 0, evasionCount = 0;
+  let pcnSum = 0, pcnDoneCount = 0, pcnWaitingCount = 0;
+  let punctBase = 0, onTimeCount = 0;
+
+  subset.forEach(function(t) {
+    const isDone = String(t.status || '').toLowerCase().startsWith('completat');
+
+    // 1. Tempo Medio Evasione (giorni)
+    if (isDone) {
+      const sStr = t.insDate || (t.createdAt ? t.createdAt.slice(0, 10) : '');
+      const eStr = (t.completedAt ? t.completedAt.slice(0, 10) : '') || (t.updatedAt ? t.updatedAt.slice(0, 10) : '');
+      if (sStr && eStr) {
+        const dStart = new Date(sStr + 'T00:00:00').getTime();
+        const dEnd = new Date(eStr + 'T00:00:00').getTime();
+        if (!isNaN(dStart) && !isNaN(dEnd) && dEnd >= dStart) {
+          evasionSum += (dEnd - dStart) / 86400000;
+          evasionCount++;
+        }
+      }
+    }
+
+    // 2. Giacenza Media Prot./PCN (giorni)
+    if (t.pcnOut && t.pcnIn) {
+      const dOut = new Date(t.pcnOut + 'T00:00:00').getTime();
+      const dIn = new Date(t.pcnIn + 'T00:00:00').getTime();
+      if (!isNaN(dOut) && !isNaN(dIn) && dIn >= dOut) {
+        pcnSum += (dIn - dOut) / 86400000;
+        pcnDoneCount++;
+      }
+    } else if (t.pcnOut && !t.pcnIn && !isClosedStatus(t.status)) {
+      pcnWaitingCount++;
+    }
+
+    // 3. Tasso di Puntualità (%)
+    if (isDone && t.date) {
+      punctBase++;
+      const closeDateISO = (t.completedAt ? t.completedAt.slice(0, 10) : '') || (t.updatedAt ? t.updatedAt.slice(0, 10) : '');
+      if (closeDateISO && closeDateISO <= t.date) {
+        onTimeCount++;
+      }
+    }
+  });
+
+  const evasionVal = evasionCount > 0 ? (evasionSum / evasionCount).toFixed(1).replace('.', ',') + ' gg' : '—';
+  const evasionSub = evasionCount > 0 ? (evasionCount + ' pratiche completate analizzate') : 'Nessuna completata con date';
+
+  const pcnVal = pcnDoneCount > 0 ? (pcnSum / pcnDoneCount).toFixed(1).replace('.', ',') + ' gg' : '—';
+  const pcnSub = (pcnDoneCount > 0 || pcnWaitingCount > 0) ? (pcnDoneCount + ' rientrate • ' + pcnWaitingCount + ' in attesa PCN') : 'Nessuna pratica con PCN';
+
+  const punctVal = punctBase > 0 ? Math.round((onTimeCount / punctBase) * 100) + '%' : '—';
+  const punctSub = punctBase > 0 ? (onTimeCount + ' su ' + punctBase + ' entro scadenza') : 'Nessuna completata con scadenza';
+
+  const kpisOpsEl = document.getElementById('stats-kpis-ops');
+  if (kpisOpsEl) {
+    kpisOpsEl.innerHTML =
+      '<div class="kpi-card" style="border-top-color:#0ea5e9;"><div class="kpi-label">Tempo Medio Evasione</div><div class="kpi-val" style="color:#0284c7;">' + evasionVal + '</div><div class="kpi-sub">' + evasionSub + '</div></div>' +
+      '<div class="kpi-card" style="border-top-color:#f59e0b;"><div class="kpi-label">Giacenza Media Prot./PCN</div><div class="kpi-val" style="color:#d97706;">' + pcnVal + '</div><div class="kpi-sub">' + pcnSub + '</div></div>' +
+      '<div class="kpi-card" style="border-top-color:#10b981;"><div class="kpi-label">Tasso di Puntualità</div><div class="kpi-val" style="color:#10b981;">' + punctVal + '</div><div class="kpi-sub">' + punctSub + '</div></div>';
+  }
 
   const months = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
   const mDone = new Array(12).fill(0), mAct = new Array(12).fill(0);
