@@ -979,6 +979,23 @@ tr:hover { background: var(--table-hover); }
 }
 .chk-del-btn:hover { background: #fee2e2; color: #dc2626; }
 
+.chk-preset-pill {
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-soft);
+  transition: 0.12s;
+  border-radius: 999px;
+}
+.chk-preset-pill:hover {
+  background: var(--today-bg);
+  border-color: var(--today-border);
+  color: var(--today-text);
+  border-style: solid;
+}
+
 /* Pillola avanzamento checklist sulle card Kanban */
 .k-pill.p-chk {
   display: inline-flex;

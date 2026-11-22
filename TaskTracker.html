@@ -546,11 +546,20 @@
     <div class="checklist-box" id="t-checklist-box" style="margin-top:10px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
         <label style="color:var(--muted); font-weight:600; font-size:0.81rem;">✅ Checklist / Passaggi Interni (<span id="t-chk-summary">0/0</span>)</label>
+        <button type="button" id="btn-chk-load-std" class="pill-ctrl" style="font-size:0.72rem; padding:2px 8px; cursor:pointer;" title="Carica i 5 passaggi standard dell'Ufficio">⚡ Flusso Standard (5)</button>
       </div>
       <div id="t-chk-list" class="chk-list"></div>
       <div id="t-chk-add-row" style="display:flex; gap:6px; margin-top:6px;">
-        <input type="text" id="t-chk-new-input" placeholder="Aggiungi passaggio (es. Visto Sezione, Firma CR, Prot.)..." style="flex:1;">
+        <input type="text" id="t-chk-new-input" placeholder="Aggiungi passaggio personalizzato..." style="flex:1;">
         <button type="button" id="btn-chk-add" class="std-btn" style="padding:0 12px;">+ Aggiungi</button>
+      </div>
+      <div id="t-chk-presets-row" style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; align-items:center;">
+        <span style="font-size:0.71rem; color:var(--muted); font-weight:600;">Preferiti:</span>
+        <button type="button" class="pill-ctrl chk-preset-pill" data-preset="Analisi documento">+ Analisi doc.</button>
+        <button type="button" class="pill-ctrl chk-preset-pill" data-preset="Parere Sezione">+ Parere Sez.</button>
+        <button type="button" class="pill-ctrl chk-preset-pill" data-preset="Coordinamento Uffici">+ Coord. Uffici</button>
+        <button type="button" class="pill-ctrl chk-preset-pill" data-preset="Approvazione CR">+ Approv. CR</button>
+        <button type="button" class="pill-ctrl chk-preset-pill" data-preset="Invio risposta">+ Invio risp.</button>
       </div>
     </div>
 

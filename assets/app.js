@@ -210,6 +210,13 @@ function updateCodePreviewForNewTask() {
    CHECKLIST, STORICO E TAB DELLA MODALE TASK
    ------------------------------------------------------------------------- */
 let modalChecklist = [];
+const DEFAULT_CHECKLIST_PRESET = [
+  'Analisi documento',
+  'Parere Sezione',
+  'Coordinamento Uffici',
+  'Approvazione CR',
+  'Invio risposta'
+];
 
 function renderModalChecklist(editable) {
   const summaryEl = document.getElementById('t-chk-summary');
@@ -219,11 +226,17 @@ function renderModalChecklist(editable) {
   const addRow = document.getElementById('t-chk-add-row');
   if (addRow) addRow.style.display = editable ? 'flex' : 'none';
 
+  const presetsRow = document.getElementById('t-chk-presets-row');
+  if (presetsRow) presetsRow.style.display = editable ? 'flex' : 'none';
+
+  const loadStdBtn = document.getElementById('btn-chk-load-std');
+  if (loadStdBtn) loadStdBtn.style.display = editable ? 'inline-block' : 'none';
+
   const listEl = document.getElementById('t-chk-list');
   if (!listEl) return;
 
   if (modalChecklist.length === 0) {
-    listEl.innerHTML = '<div style="font-size:0.76rem; color:var(--muted); font-style:italic; padding:4px 2px;">Nessun passaggio interno definito.</div>';
+    listEl.innerHTML = '<div style="font-size:0.76rem; color:var(--muted); font-style:italic; padding:4px 2px;">Nessun passaggio definito. Clicca su <b>⚡ Flusso Standard</b> o aggiungi un passaggio.</div>';
     return;
   }
 
@@ -1824,6 +1837,41 @@ function initApp() {
 
   const btnChkAdd = document.getElementById('btn-chk-add');
   if (btnChkAdd) btnChkAdd.addEventListener('click', addChecklistItemFromInput);
+
+  const btnChkLoadStd = document.getElementById('btn-chk-load-std');
+  if (btnChkLoadStd) {
+    btnChkLoadStd.addEventListener('click', function() {
+      if (modalChecklist.length > 0) {
+        if (!confirm('Aggiungere i 5 passaggi standard alla checklist attuale?')) return;
+        DEFAULT_CHECKLIST_PRESET.forEach(function(txt) {
+          if (!modalChecklist.some(function(c) { return c.text === txt; })) {
+            modalChecklist.push({ text: txt, done: false });
+          }
+        });
+      } else {
+        modalChecklist = DEFAULT_CHECKLIST_PRESET.map(function(txt) { return { text: txt, done: false }; });
+      }
+      renderModalChecklist(true);
+      showToast('✓ Caricati i passaggi standard');
+    });
+  }
+
+  const presetsRow = document.getElementById('t-chk-presets-row');
+  if (presetsRow) {
+    presetsRow.addEventListener('click', function(e) {
+      const btn = e.target.closest('.chk-preset-pill');
+      if (!btn) return;
+      const text = btn.getAttribute('data-preset');
+      if (!text) return;
+      if (!modalChecklist.some(function(c) { return c.text === text; })) {
+        modalChecklist.push({ text: text, done: false });
+        renderModalChecklist(true);
+        showToast('✓ Aggiunto: ' + text);
+      } else {
+        showToast('Passaggio già presente nella lista');
+      }
+    });
+  }
 
   const inputChkNew = document.getElementById('t-chk-new-input');
   if (inputChkNew) {
