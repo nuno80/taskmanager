@@ -338,6 +338,12 @@ function renderKanbanCard(t) {
                 : (ev.code === '48H') ? '<span class="k-pill p-warn">≤ 48h</span>'
                 : (ev.code === 'MID') ? '<span class="k-pill p-mid">Verifica -7gg</span>' : '';
 
+  const chkList = Array.isArray(t.checklist) ? t.checklist : [];
+  const chkDone = chkList.filter(function(c) { return Boolean(c && c.done); }).length;
+  const chkPill = chkList.length > 0
+    ? '<span class="k-pill p-chk' + (chkDone === chkList.length ? ' all-done' : '') + '" title="Avanzamento passaggi interni">☑ ' + chkDone + '/' + chkList.length + '</span>'
+    : '';
+
   return '<div class="k-card ' + ev.cardClass + '" draggable="' + (canDragHere ? 'true' : 'false') + '" data-task-id="' + safeId + '" data-action="edit" data-id="' + safeId + '">' +
     '<div class="k-top">' +
       '<div class="k-sec-av" style="background:' + secColor + '; color:' + secTextCol + ';" title="Sezione ' + safeSec + '">' + safeSec.slice(0, 2) + '</div>' +
@@ -346,6 +352,7 @@ function renderKanbanCard(t) {
     '<div class="k-tags">' +
       '<span class="k-pill p-code">' + escapeHtml(t.code || '-') + '</span>' +
       urgPill +
+      chkPill +
       '<span class="k-pill">' + escapeHtml(normalizeApprover(t.dest)) + '</span>' +
       (kanbanGroup === 'sec' ? '<span class="k-pill">' + escapeHtml(t.status) + '</span>' : '') +
       (t.ato ? '<span class="k-pill">ATO #' + escapeHtml(t.ato) + '</span>' : '') +

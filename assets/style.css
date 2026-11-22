@@ -897,3 +897,100 @@ tr:hover { background: var(--table-hover); }
     margin: 0 !important;
   }
 }
+
+/* =========================================================
+   PACCHETTO 2: CHECKLIST, TAB MODALE & BADGE KANBAN
+   ========================================================= */
+.modal-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.modal-tab-btn {
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.79rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.14s;
+}
+.modal-tab-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.modal-tab-btn.active {
+  background: var(--blue-btn);
+  border-color: var(--blue-btn);
+  color: #ffffff;
+}
+
+.checklist-box {
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.chk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+.chk-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 0.81rem;
+}
+.chk-item.is-done .chk-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.chk-del-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.chk-del-btn:hover { background: #fee2e2; color: #dc2626; }
+
+/* Pillola avanzamento checklist sulle card Kanban */
+.k-pill.p-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.k-pill.p-chk.all-done {
+  background: #16a34a !important;
+  color: #ffffff !important;
+}
+
+/* Voci cronologia dentro modale */
+.hist-row {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 0.79rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.hist-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

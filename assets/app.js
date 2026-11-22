@@ -44,6 +44,62 @@ function toggleRail() {
 let draggedTaskId = null;
 let editingTaskLoadedUpdatedAt = null;
 
+/* -------------------------------------------------------------------------
+   PACCHETTO 2: TEMPLATE PRATICHE PRECOMPILATE
+   ------------------------------------------------------------------------- */
+const TASK_TEMPLATES = [
+  {
+    id: 'tpl-appunto-casmd',
+    label: '📝 Appunto per Ca.SMD / SCa.SMD',
+    tipo: 'Appunto',
+    prio: 'Urgente',
+    classif: 'Riservato / NATO Restricted',
+    dest: 'Ca.SMD',
+    daysDue: 3,
+    checklist: ['Bozza Sezione', 'Visto Capo Sezione (CS)', 'Visto CU/VCU', 'Firma CR', 'Consegna Prot./PCN']
+  },
+  {
+    id: 'tpl-coord-interforze',
+    label: '🤝 Coordinazione Inter-Ufficio',
+    tipo: 'Coordinazione',
+    prio: 'Ordinario',
+    classif: 'Uso Ufficiale / NATO Unclassified',
+    dest: 'CR',
+    daysDue: 5,
+    checklist: ['Analisi documento', 'Parere Sezione', 'Coordinamento Uffici', 'Approvazione CR', 'Invio risposta']
+  },
+  {
+    id: 'tpl-briefing-nato-ue',
+    label: '🎤 Briefing / Talking Points',
+    tipo: 'Briefing',
+    prio: 'Urgente',
+    classif: 'Riservato / NATO Restricted',
+    dest: 'SCa.SMD',
+    daysDue: 4,
+    checklist: ['Raccolta contributi', 'Stesura Talking Points', 'Verifica -7gg', 'Validazione CU', 'Consegna cartella']
+  },
+  {
+    id: 'tpl-flash-card',
+    label: '⚡ Flash Card / Punto Rapido',
+    tipo: 'Flash Card',
+    prio: 'Critica / Flash',
+    classif: 'Uso Ufficiale / NATO Unclassified',
+    dest: 'CU/VCU',
+    daysDue: 1,
+    checklist: ['Sintesi 1 pagina', 'Visto CS', 'Invio immediato']
+  },
+  {
+    id: 'tpl-dossier-periodico',
+    label: '📂 Dossier / Aggiornamento Periodico',
+    tipo: 'Dossier',
+    prio: 'Ordinario',
+    classif: 'Riservato / NATO Restricted',
+    dest: 'CR',
+    daysDue: 10,
+    checklist: ['Aggiornamento schede', 'Verifica dati PCN', 'Revisione allegati', 'Approvazione finale']
+  }
+];
+
 function addMonthsSafe(y, m, d, deltaMonths) {
   const targetFirst = new Date(y, m + deltaMonths, 1);
   const maxDay = new Date(targetFirst.getFullYear(), targetFirst.getMonth() + 1, 0).getDate();
@@ -150,7 +206,104 @@ function updateCodePreviewForNewTask() {
   document.getElementById('modal-code-badge').textContent = preview;
 }
 
-function openModal(id) {
+/* -------------------------------------------------------------------------
+   CHECKLIST, STORICO E TAB DELLA MODALE TASK
+   ------------------------------------------------------------------------- */
+let modalChecklist = [];
+
+function renderModalChecklist(editable) {
+  const summaryEl = document.getElementById('t-chk-summary');
+  const doneCount = modalChecklist.filter(function(c) { return Boolean(c && c.done); }).length;
+  if (summaryEl) summaryEl.textContent = doneCount + '/' + modalChecklist.length;
+
+  const addRow = document.getElementById('t-chk-add-row');
+  if (addRow) addRow.style.display = editable ? 'flex' : 'none';
+
+  const listEl = document.getElementById('t-chk-list');
+  if (!listEl) return;
+
+  if (modalChecklist.length === 0) {
+    listEl.innerHTML = '<div style="font-size:0.76rem; color:var(--muted); font-style:italic; padding:4px 2px;">Nessun passaggio interno definito.</div>';
+    return;
+  }
+
+  listEl.innerHTML = modalChecklist.map(function(c, idx) {
+    const isDone = Boolean(c && c.done);
+    const textEsc = escapeHtml(c.text || '');
+    return '<div class="chk-item' + (isDone ? ' is-done' : '') + '">' +
+      '<label style="display:flex; align-items:center; gap:8px; cursor:' + (editable ? 'pointer' : 'default') + '; flex:1; min-width:0; margin:0;">' +
+        '<input type="checkbox" data-chk-toggle="' + idx + '" ' + (isDone ? 'checked' : '') + ' ' + (editable ? '' : 'disabled') + ' style="cursor:pointer;">' +
+        '<span class="chk-text" style="word-break:break-word;">' + textEsc + '</span>' +
+      '</label>' +
+      (editable ? '<button type="button" class="chk-del-btn" data-chk-del="' + idx + '" title="Rimuovi passaggio">✕</button>' : '') +
+    '</div>';
+  }).join('');
+}
+
+function addChecklistItemFromInput() {
+  const input = document.getElementById('t-chk-new-input');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  modalChecklist.push({ text: val, done: false });
+  input.value = '';
+  renderModalChecklist(true);
+}
+
+function setModalTab(tabName) {
+  const tabs = document.querySelectorAll('#modal-task-tabs .modal-tab-btn');
+  tabs.forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-mtab') === tabName);
+  });
+  const paneDetails = document.getElementById('modal-pane-details');
+  const paneHistory = document.getElementById('modal-pane-history');
+  if (paneDetails) paneDetails.classList.toggle('hidden', tabName !== 'details');
+  if (paneHistory) paneHistory.classList.toggle('hidden', tabName !== 'history');
+}
+
+async function loadAndRenderTaskHistory(taskObj) {
+  const countEl = document.getElementById('modal-hist-count');
+  const listEl = document.getElementById('modal-task-history-list');
+  if (!listEl) return;
+
+  if (!taskObj) {
+    if (countEl) countEl.textContent = '0';
+    listEl.innerHTML = '<div style="font-size:0.78rem; color:var(--muted); font-style:italic; padding:12px; text-align:center;">Salva prima la pratica per registrarne la cronologia delle modifiche.</div>';
+    return;
+  }
+
+  if (storageMode === 'fs' && logs.length === 0) {
+    try { await syncAllFromStorage(true, false); } catch (e) {}
+  }
+
+  const codeTag = taskObj.code ? ('[' + taskObj.code + ']') : '';
+  const taskLogs = logs.filter(function(l) {
+    if (!l) return false;
+    if (codeTag && l.target && l.target.includes(codeTag)) return true;
+    if (l.target && l.target.includes(taskObj.id)) return true;
+    return false;
+  });
+
+  if (countEl) countEl.textContent = taskLogs.length;
+
+  if (taskLogs.length === 0) {
+    listEl.innerHTML = '<div style="font-size:0.78rem; color:var(--muted); font-style:italic; padding:12px; text-align:center;">Nessuna operazione registrata per questa pratica nell\'Audit Log.</div>';
+    return;
+  }
+
+  listEl.innerHTML = taskLogs.map(function(l) {
+    const actClass = 'la-' + (l.action || 'MODIFICATO');
+    return '<div class="hist-row">' +
+      '<div class="hist-row-head">' +
+        '<span><span class="log-action-badge ' + actClass + '">' + escapeHtml(l.action || 'AZIONE') + '</span> <strong style="margin-left:4px;">' + escapeHtml(l.user || 'Utente') + '</strong> <small style="color:var(--muted);">(' + escapeHtml(l.userSec || l.sec || '-') + ')</small></span>' +
+        '<span style="font-size:0.73rem; color:var(--muted);">' + escapeHtml(formatTimestamp(l.ts)) + '</span>' +
+      '</div>' +
+      (l.details ? ('<div style="color:var(--text-soft); font-size:0.77rem; margin-top:2px; word-break:break-word;">' + escapeHtml(l.details) + '</div>') : '') +
+    '</div>';
+  }).join('');
+}
+
+function openModal(id, templatePreset) {
   const t = id ? tasks.find(function(x) { return x.id === id; }) : null;
   const todayISO = toISODateLocal(new Date());
   const editable = t ? canEditTask(t) : true;
@@ -159,7 +312,11 @@ function openModal(id) {
 
   editingTaskLoadedUpdatedAt = t ? (t.updatedAt || null) : null;
 
-  document.getElementById('modal-title').textContent = t ? 'Dettaglio Pratica' : 'Nuova Pratica / Task';
+  setModalTab('details');
+
+  document.getElementById('modal-title').textContent = t
+    ? 'Dettaglio Pratica'
+    : (templatePreset ? ('Nuova Pratica — ' + templatePreset.label.replace(/^[^\wÀ-ÿ]+/, '')) : 'Nuova Pratica / Task');
   document.getElementById('modal-readonly-tag').classList.toggle('hidden', editable);
   document.getElementById('btn-save-task').classList.toggle('hidden', !editable);
   document.getElementById('btn-delete-in-modal').classList.toggle('hidden', !(t && editable));
@@ -168,21 +325,43 @@ function openModal(id) {
   document.getElementById('t-code').value = t ? (t.code || '') : '';
   document.getElementById('t-ato').value = t ? (t.ato || '') : '';
   document.getElementById('t-sec').value = t ? sanitizeSection(t.sec) : (isAdmin ? (curSecFilter || 'NATO') : sanitizeSection(currentUser.sec));
-  document.getElementById('t-tipo').value = t ? (t.tipo || 'Appunto') : 'Appunto';
+  document.getElementById('t-tipo').value = t ? (t.tipo || 'Appunto') : (templatePreset ? templatePreset.tipo : 'Appunto');
   document.getElementById('t-title').value = t ? t.title : '';
-  document.getElementById('t-prio').value = t ? (t.prio || 'Ordinario') : 'Ordinario';
-  document.getElementById('t-class').value = t ? (t.classif || 'Non Classificato') : 'Non Classificato';
-  document.getElementById('t-dest').value = t ? normalizeApprover(t.dest) : 'CR';
+  document.getElementById('t-prio').value = t ? (t.prio || 'Ordinario') : (templatePreset ? templatePreset.prio : 'Ordinario');
+  document.getElementById('t-class').value = t ? (t.classif || 'Non Classificato') : (templatePreset ? templatePreset.classif : 'Non Classificato');
+  document.getElementById('t-dest').value = t ? normalizeApprover(t.dest) : (templatePreset ? templatePreset.dest : 'CR');
   document.getElementById('t-ins-date').value = t ? (t.insDate || todayISO) : todayISO;
   document.getElementById('t-pcn-out').value = t ? (t.pcnOut || '') : '';
   document.getElementById('t-pcn-in').value = t ? (t.pcnIn || '') : '';
-  document.getElementById('t-date').value = t ? (t.date || '') : '';
+
+  let initialDueDate = '';
+  if (t) {
+    initialDueDate = t.date || '';
+  } else if (templatePreset && templatePreset.daysDue) {
+    const d = new Date();
+    d.setDate(d.getDate() + templatePreset.daysDue);
+    initialDueDate = toISODateLocal(d);
+  }
+  document.getElementById('t-date').value = initialDueDate;
   document.getElementById('t-time').value = t ? (t.time || '12:00') : '12:00';
   document.getElementById('t-status').value = t ? (t.status || 'In lavorazione') : 'In lavorazione';
   document.getElementById('t-prot').value = t ? (t.prot || '') : '';
   document.getElementById('t-link').value = t ? (t.link || '') : '';
   document.getElementById('t-notes').value = t ? (t.notes || '') : '';
   document.getElementById('t-mid-done').checked = t ? Boolean(t.midDone) : false;
+
+  // Popolamento Checklist
+  if (t) {
+    modalChecklist = Array.isArray(t.checklist)
+      ? t.checklist.map(function(c) { return { text: String(c.text || ''), done: Boolean(c.done) }; })
+      : [];
+  } else if (templatePreset && Array.isArray(templatePreset.checklist)) {
+    modalChecklist = templatePreset.checklist.map(function(txt) { return { text: String(txt || ''), done: false }; });
+  } else {
+    modalChecklist = [];
+  }
+  renderModalChecklist(editable);
+  loadAndRenderTaskHistory(t);
 
   if (t && t.code) {
     document.getElementById('t-code-display').value = t.code;
@@ -369,6 +548,10 @@ async function saveTask() {
   const id = existingId || ('TSK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5));
   const code = (oldTask && oldTask.code) ? oldTask.code : await generateSafeAutoCode(sec, insDate.slice(0, 4));
 
+  const cleanChecklist = modalChecklist
+    .map(function(c) { return { text: String(c.text || '').trim(), done: Boolean(c.done) }; })
+    .filter(function(c) { return c.text; });
+
   const item = {
     id: id, code: code, ato: document.getElementById('t-ato').value.trim(), sec: sec,
     tipo: document.getElementById('t-tipo').value, title: title,
@@ -379,6 +562,7 @@ async function saveTask() {
     status: document.getElementById('t-status').value, prot: document.getElementById('t-prot').value.trim(),
     link: document.getElementById('t-link').value.trim(), notes: document.getElementById('t-notes').value.trim(),
     midDone: document.getElementById('t-mid-done').checked,
+    checklist: cleanChecklist,
     createdBy: oldTask ? (oldTask.createdBy || userLabel) : userLabel,
     createdAt: oldTask ? (oldTask.createdAt || nowISO) : nowISO,
     updatedBy: userLabel, updatedAt: nowISO
@@ -391,6 +575,13 @@ async function saveTask() {
     if (oldTask.dest !== item.dest) diffs.push('Approv.: ' + oldTask.dest + ' → ' + item.dest);
     if (oldTask.sec !== item.sec) diffs.push('Sezione: ' + oldTask.sec + ' → ' + item.sec);
     if (oldTask.title !== item.title) diffs.push('Oggetto modificato');
+
+    const oldChk = Array.isArray(oldTask.checklist) ? oldTask.checklist : [];
+    const oldDone = oldChk.filter(function(x) { return Boolean(x && x.done); }).length;
+    const newDone = cleanChecklist.filter(function(x) { return Boolean(x && x.done); }).length;
+    if (oldChk.length !== cleanChecklist.length || oldDone !== newDone) {
+      diffs.push('Checklist: ' + oldDone + '/' + oldChk.length + ' → ' + newDone + '/' + cleanChecklist.length);
+    }
   }
 
   // Prepara lista aggiornata senza ancora mutare `tasks` finché la scrittura su disco non riesce
@@ -1207,6 +1398,45 @@ function initApp() {
   }
 
   document.getElementById('btn-new-task').addEventListener('click', function() { openModal(null); });
+
+  // Dropdown Template Precompilati
+  const popTplList = document.getElementById('popover-template-list');
+  if (popTplList) {
+    popTplList.innerHTML = TASK_TEMPLATES.map(function(tpl) {
+      return '<div class="popover-item" data-tpl-id="' + escapeHtml(tpl.id) + '">' +
+        '<span>' + escapeHtml(tpl.label) + '</span>' +
+        '<span style="font-size:0.72rem; opacity:0.8;">(+' + tpl.daysDue + 'gg)</span>' +
+      '</div>';
+    }).join('');
+
+    popTplList.addEventListener('click', function(e) {
+      const item = e.target.closest('[data-tpl-id]');
+      if (!item) return;
+      const tplId = item.getAttribute('data-tpl-id');
+      const tpl = TASK_TEMPLATES.find(function(x) { return x.id === tplId; });
+      document.getElementById('popover-templates').classList.add('hidden');
+      if (tpl) openModal(null, tpl);
+    });
+  }
+
+  const btnNewFromTpl = document.getElementById('btn-new-from-tpl');
+  if (btnNewFromTpl) {
+    btnNewFromTpl.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const pop = document.getElementById('popover-templates');
+      if (pop) pop.classList.toggle('hidden');
+    });
+  }
+
+  // Chiusura al click esterno per popover template
+  document.addEventListener('click', function(e) {
+    const popTpl = document.getElementById('popover-templates');
+    if (popTpl && !popTpl.classList.contains('hidden')) {
+      if (!e.target.closest('#tpl-dropdown-wrap')) {
+        popTpl.classList.add('hidden');
+      }
+    }
+  });
   document.getElementById('btn-sync-now').addEventListener('click', function() { syncAllFromStorage(false, true); });
 
   // Filtri Rapidi 1-clic (Mia Sez., Attesa PCN, Verifica -7gg)
@@ -1394,6 +1624,52 @@ function initApp() {
       }
     }
   });
+
+  // Tab e Checklist nella Modale Task
+  const modalTaskTabs = document.getElementById('modal-task-tabs');
+  if (modalTaskTabs) {
+    modalTaskTabs.addEventListener('click', function(e) {
+      const btn = e.target.closest('[data-mtab]');
+      if (!btn) return;
+      setModalTab(btn.getAttribute('data-mtab'));
+    });
+  }
+
+  const btnChkAdd = document.getElementById('btn-chk-add');
+  if (btnChkAdd) btnChkAdd.addEventListener('click', addChecklistItemFromInput);
+
+  const inputChkNew = document.getElementById('t-chk-new-input');
+  if (inputChkNew) {
+    inputChkNew.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addChecklistItemFromInput();
+      }
+    });
+  }
+
+  const chkListEl = document.getElementById('t-chk-list');
+  if (chkListEl) {
+    chkListEl.addEventListener('change', function(e) {
+      const chk = e.target.closest('[data-chk-toggle]');
+      if (!chk) return;
+      const idx = parseInt(chk.getAttribute('data-chk-toggle'), 10);
+      if (!isNaN(idx) && modalChecklist[idx]) {
+        modalChecklist[idx].done = chk.checked;
+        renderModalChecklist(true);
+      }
+    });
+
+    chkListEl.addEventListener('click', function(e) {
+      const delBtn = e.target.closest('[data-chk-del]');
+      if (!delBtn) return;
+      const idx = parseInt(delBtn.getAttribute('data-chk-del'), 10);
+      if (!isNaN(idx) && modalChecklist[idx]) {
+        modalChecklist.splice(idx, 1);
+        renderModalChecklist(true);
+      }
+    });
+  }
 
   document.getElementById('btn-cancel-modal').addEventListener('click', closeModal);
   document.getElementById('btn-save-task').addEventListener('click', saveTask);

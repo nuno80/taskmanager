@@ -179,6 +179,14 @@
     <div class="top-left">
       <button type="button" id="btn-new-task" class="btn-add">+ Nuovo Task</button>
 
+      <div style="position:relative; display:inline-block;" id="tpl-dropdown-wrap">
+        <button type="button" id="btn-new-from-tpl" class="pill-ctrl" title="Crea pratica da modello precompilato">📋 Da Template ▾</button>
+        <div id="popover-templates" class="popover-dropdown hidden" style="left:0; top:calc(100% + 6px); min-width:240px;">
+          <div class="popover-title">Modelli Precompilati</div>
+          <div id="popover-template-list"></div>
+        </div>
+      </div>
+
       <input type="search" id="f-search" class="top-search" placeholder="🔍 Cerca codice, oggetto, ATO...">
 
       <div class="view-switch">
@@ -381,7 +389,13 @@
 
     <div id="modal-dup-warning" class="dup-warning-box hidden"></div>
 
-    <div class="form-row">
+    <div class="modal-tabs" id="modal-task-tabs">
+      <button type="button" class="modal-tab-btn active" data-mtab="details">📝 Dettagli Pratica</button>
+      <button type="button" class="modal-tab-btn" data-mtab="history">📜 Cronologia (<span id="modal-hist-count">0</span>)</button>
+    </div>
+
+    <div id="modal-pane-details">
+      <div class="form-row">
       <div class="form-group">
         <label>Codice Interno (Automatico)</label>
         <input type="text" id="t-code-display" readonly style="opacity:0.85; font-family:ui-monospace,monospace; font-weight:700;">
@@ -508,8 +522,29 @@
       <textarea id="t-notes" placeholder="Annotazioni interne, punti di attenzione..."></textarea>
     </div>
 
+    <!-- CHECKLIST / SOTTO-ATTIVITÀ INTERNE -->
+    <div class="checklist-box" id="t-checklist-box" style="margin-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="color:var(--muted); font-weight:600; font-size:0.81rem;">✅ Checklist / Passaggi Interni (<span id="t-chk-summary">0/0</span>)</label>
+      </div>
+      <div id="t-chk-list" class="chk-list"></div>
+      <div id="t-chk-add-row" style="display:flex; gap:6px; margin-top:6px;">
+        <input type="text" id="t-chk-new-input" placeholder="Aggiungi passaggio (es. Visto Sezione, Firma CR, Prot.)..." style="flex:1;">
+        <button type="button" id="btn-chk-add" class="std-btn" style="padding:0 12px;">+ Aggiungi</button>
+      </div>
+    </div>
+
     <!-- ULTIMA MODIFICA (visibile solo aprendo il task) -->
     <div id="t-audit-box" class="audit-footer hidden"></div>
+    </div>
+
+    <!-- PANNELLO CRONOLOGIA SINGOLA PRATICA -->
+    <div id="modal-pane-history" class="hidden" style="display:flex; flex-direction:column; gap:8px;">
+      <div style="font-size:0.78rem; color:var(--muted);">
+        Storico completo delle operazioni registrate nell'Audit Log per questa pratica.
+      </div>
+      <div id="modal-task-history-list" style="max-height:52vh; overflow-y:auto; border:1px solid var(--border); border-radius:8px; background:var(--surface-sub); padding:8px; display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; flex-wrap:wrap; gap:8px;">
       <label style="font-size:0.81rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
