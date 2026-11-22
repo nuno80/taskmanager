@@ -16,6 +16,8 @@ let kanbanGroup = 'status'; // 'status' | 'sec'
 let activeSecFilter = '';   // sincronizzato con #f-sec
 let activeYearFilter = '';  // dal popover anni
 let onlyCriticalFilter = false; // dalla campanella
+let quickFilterPcn = false;     // filtro rapido 1-clic attesa PCN
+let quickFilterMid = false;     // filtro rapido 1-clic verifica intermedia (-7gg)
 let calDate = new Date();
 let calMode = 'month';
 let hideCompleted = true;
@@ -167,6 +169,8 @@ function getFilteredTasks() {
       const c = evaluateTask(t).code;
       if (c !== 'EXP' && c !== '24H' && c !== '48H') return false;
     }
+    if (quickFilterPcn && !(t.pcnOut && !t.pcnIn)) return false;
+    if (quickFilterMid && evaluateTask(t).code !== 'MID') return false;
     if (q) {
       const hay = [t.code, t.ato, t.title, t.prot, t.notes, t.classif].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
@@ -247,6 +251,35 @@ function updateSidebarCounters() {
 
   const critBanner = document.getElementById('crit-filter-banner');
   if (critBanner) critBanner.classList.toggle('hidden', !onlyCriticalFilter);
+
+  // Filtri Rapidi 1-clic (Attesa PCN, Verifica -7gg, Mia Sez.)
+  const pcnCount = scopedTasks.filter(function(t) {
+    return !isClosedStatus(t.status) && Boolean(t.pcnOut && !t.pcnIn);
+  }).length;
+  const midCount = scopedTasks.filter(function(t) {
+    return !isClosedStatus(t.status) && evaluateTask(t).code === 'MID';
+  }).length;
+
+  const pcnEl = document.getElementById('qf-pcn-cnt');
+  if (pcnEl) pcnEl.textContent = pcnCount;
+  const midEl = document.getElementById('qf-mid-cnt');
+  if (midEl) midEl.textContent = midCount;
+
+  const btnPcn = document.getElementById('btn-qf-pcn');
+  if (btnPcn) btnPcn.classList.toggle('toggle-on', quickFilterPcn);
+
+  const btnMid = document.getElementById('btn-qf-mid');
+  if (btnMid) btnMid.classList.toggle('toggle-on', quickFilterMid);
+
+  const btnMySec = document.getElementById('btn-qf-mysec');
+  if (btnMySec) {
+    const isSecUser = currentUser && currentUser.role !== 'admin' && VALID_SECTIONS.includes(currentUser.sec);
+    btnMySec.classList.toggle('hidden', !isSecUser);
+    if (isSecUser) {
+      btnMySec.textContent = '👤 Mia Sez. (' + currentUser.sec + ')';
+      btnMySec.classList.toggle('toggle-on', activeSecFilter === currentUser.sec);
+    }
+  }
 
   // Pulsante completati coerente con Anno e Sezione selezionati
   const completedCount = scopedTasks.filter(function(t) {
@@ -614,4 +647,161 @@ function renderStats() {
     const pct = total > 0 ? Math.round((cnt / total) * 100) : 0;
     return '<div class="hbar-item"><div class="hbar-top"><span><b>' + tp + '</b></span><span>' + cnt + ' (' + pct + '%)</span></div><div class="hbar-track"><div class="hbar-fill" style="width:' + pct + '%; background:#06b6d4;"></div></div></div>';
   }).join('');
+}
+
+/* -------------------------------------------------------------------------
+   PUNTO DI SITUAZIONE — GENERAZIONE HTML PER WORD / OUTLOOK / STAMPA
+   ------------------------------------------------------------------------- */
+function buildBriefingHtml(secFilter, includeDone7d) {
+  const safeSec = secFilter ? sanitizeSection(secFilter) : '';
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  const scopeLabel = safeSec ? ('SEZIONE ' + safeSec) : 'UFFICIO OI — TUTTE LE SEZIONI';
+
+  // Filtra per sezione se specificata
+  const baseList = tasks.filter(function(t) {
+    if (safeSec && t.sec !== safeSec) return false;
+    return true;
+  });
+
+  // Gruppo 1: Scadute e Critiche (≤ 48h)
+  const gCrit = [];
+  // Gruppo 2: In Verifica Intermedia (-7gg)
+  const gMid = [];
+  // Gruppo 3: Attive / In Lavorazione
+  const gActive = [];
+  // Gruppo 4: Concluse ultimi 7 giorni
+  const gDone7 = [];
+
+  const sevenDaysAgo = now.getTime() - (7 * 86400000);
+
+  baseList.forEach(function(t) {
+    const sLower = String(t.status || '').trim().toLowerCase();
+    const isClosed = sLower.startsWith('completat') || sLower.startsWith('annullat');
+
+    if (isClosed) {
+      if (includeDone7d && sLower.startsWith('completat')) {
+        const refDateStr = t.updatedAt || t.insDate || t.date || '';
+        const refTime = refDateStr ? new Date(refDateStr).getTime() : 0;
+        if (!isNaN(refTime) && refTime >= sevenDaysAgo) {
+          gDone7.push(t);
+        }
+      }
+      return;
+    }
+
+    const evalRes = evaluateTask(t);
+    if (['EXP', '24H', '48H'].includes(evalRes.code)) {
+      gCrit.push(t);
+    } else if (evalRes.code === 'MID') {
+      gMid.push(t);
+    } else {
+      gActive.push(t);
+    }
+  });
+
+  gCrit.sort(compareByDue);
+  gMid.sort(compareByDue);
+  gActive.sort(compareByDue);
+  gDone7.sort(compareByDue);
+
+  function renderGroupTable(items, emptyMsg) {
+    if (items.length === 0) {
+      return '<div style="font-style:italic; color:#64748b; padding:8px 0; font-size:9.5pt;">' + emptyMsg + '</div>';
+    }
+    let html = '<table style="width:100%; border-collapse:collapse; margin-bottom:18px; font-family:Calibri,Segoe UI,Arial,sans-serif; font-size:9.5pt;">' +
+      '<thead><tr style="background:#0f1b38; color:#ffffff; text-align:left;">' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px; width:11%;">Codice</th>' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px; width:7%;">Sez.</th>' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px;">Oggetto</th>' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px; width:11%;">Approv.</th>' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px; width:14%;">Scadenza</th>' +
+      '<th style="border:1px solid #cbd5e1; padding:6px 8px; width:22%;">Stato / Note PCN</th>' +
+      '</tr></thead><tbody>';
+
+    items.forEach(function(t, idx) {
+      const rowBg = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+      const secColor = SEC_COLORS[t.sec] || '#0284c7';
+      let pcnBadge = '';
+      if (t.pcnOut && !t.pcnIn) {
+        pcnBadge = '<div style="margin-top:3px; font-weight:700; color:#d97706; font-size:8.5pt;">📤 In PCN dal ' + escapeHtml(formatD(t.pcnOut)) + '</div>';
+      } else if (t.pcnOut && t.pcnIn) {
+        pcnBadge = '<div style="margin-top:3px; color:#16a34a; font-size:8.5pt;">📥 Rientrato PCN il ' + escapeHtml(formatD(t.pcnIn)) + '</div>';
+      }
+
+      const dueStr = t.date ? (formatD(t.date) + (t.time ? (' ' + escapeHtml(t.time)) : '')) : '<span style="color:#94a3b8;">-</span>';
+      const atoStr = t.ato ? (' <small style="color:#64748b;">(ATO: ' + escapeHtml(t.ato) + ')</small>') : '';
+
+      html += '<tr style="background:' + rowBg + ';">' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px; font-weight:700; color:#0f172a;">' + escapeHtml(t.code || '-') + '</td>' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px;"><strong style="color:' + secColor + ';">' + escapeHtml(t.sec || '-') + '</strong></td>' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px; color:#1e293b;"><b>' + escapeHtml(t.title || '-') + '</b>' + atoStr + '</td>' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px; color:#334155;">' + escapeHtml(normalizeApprover(t.dest)) + '</td>' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px; font-weight:600;">' + dueStr + '</td>' +
+        '<td style="border:1px solid #cbd5e1; padding:6px 8px; color:#334155;">' + escapeHtml(t.status || 'Da iniziare') + pcnBadge + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  let out = '<div style="font-family:Calibri,Segoe UI,Arial,sans-serif; color:#0f172a; line-height:1.4;">' +
+    '<div style="border-bottom:2px solid #0f1b38; padding-bottom:10px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap;">' +
+    '<div>' +
+    '<h2 style="margin:0 0 4px 0; font-size:15pt; color:#0f1b38; text-transform:uppercase; letter-spacing:0.5px;">UFFICIO OI — PUNTO DI SITUAZIONE</h2>' +
+    '<div style="font-size:10pt; font-weight:700; color:#2563eb;">' + escapeHtml(scopeLabel) + '</div>' +
+    '</div>' +
+    '<div style="text-align:right; font-size:9pt; color:#64748b;">' +
+    '<div>Generato il: <b>' + escapeHtml(dateStr) + ' ore ' + escapeHtml(timeStr) + '</b></div>' +
+    '<div>Operatore: <b>' + escapeHtml(currentUser ? (currentUser.name + ' (' + currentUser.sec + ')') : 'Admin') + '</b></div>' +
+    '</div>' +
+    '</div>';
+
+  // Box Riepilogo Numerico
+  out += '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">' +
+    '<div style="flex:1; min-width:140px; background:#fef2f2; border:1px solid #fecaca; border-left:4px solid #ef4444; padding:8px 10px; border-radius:6px;">' +
+    '<div style="font-size:8pt; text-transform:uppercase; font-weight:700; color:#991b1b;">Scadute &le; 48h</div>' +
+    '<div style="font-size:16pt; font-weight:800; color:#b91c1c;">' + gCrit.length + '</div>' +
+    '</div>' +
+    '<div style="flex:1; min-width:140px; background:#faf5ff; border:1px solid #e9d5ff; border-left:4px solid #a855f7; padding:8px 10px; border-radius:6px;">' +
+    '<div style="font-size:8pt; text-transform:uppercase; font-weight:700; color:#6b21a8;">Verifica -7gg</div>' +
+    '<div style="font-size:16pt; font-weight:800; color:#7e22ce;">' + gMid.length + '</div>' +
+    '</div>' +
+    '<div style="flex:1; min-width:140px; background:#eff6ff; border:1px solid #bfdbfe; border-left:4px solid #3b82f6; padding:8px 10px; border-radius:6px;">' +
+    '<div style="font-size:8pt; text-transform:uppercase; font-weight:700; color:#1e40af;">In Lavorazione</div>' +
+    '<div style="font-size:16pt; font-weight:800; color:#1d4ed8;">' + gActive.length + '</div>' +
+    '</div>' +
+    (includeDone7d ? (
+      '<div style="flex:1; min-width:140px; background:#f0fdf4; border:1px solid #bbf7d0; border-left:4px solid #22c55e; padding:8px 10px; border-radius:6px;">' +
+      '<div style="font-size:8pt; text-transform:uppercase; font-weight:700; color:#166534;">Concluse 7gg</div>' +
+      '<div style="font-size:16pt; font-weight:800; color:#15803d;">' + gDone7.length + '</div>' +
+      '</div>'
+    ) : '') +
+    '</div>';
+
+  // Sezione 1
+  out += '<div style="margin-bottom:8px;"><h3 style="margin:0 0 6px 0; font-size:11pt; color:#991b1b; display:flex; align-items:center; gap:6px;">🔴 1. Pratiche Scadute &amp; Critiche (&le; 48 ore) (' + gCrit.length + ')</h3>' +
+    renderGroupTable(gCrit, 'Nessuna pratica scaduta o critica.') +
+    '</div>';
+
+  // Sezione 2
+  out += '<div style="margin-bottom:8px;"><h3 style="margin:0 0 6px 0; font-size:11pt; color:#6b21a8; display:flex; align-items:center; gap:6px;">🟣 2. Pratiche in Verifica Intermedia (-7gg) (' + gMid.length + ')</h3>' +
+    renderGroupTable(gMid, 'Nessuna pratica in finestra di verifica intermedia.') +
+    '</div>';
+
+  // Sezione 3
+  out += '<div style="margin-bottom:8px;"><h3 style="margin:0 0 6px 0; font-size:11pt; color:#1e40af; display:flex; align-items:center; gap:6px;">🔵 3. Pratiche Attive / In Lavorazione (' + gActive.length + ')</h3>' +
+    renderGroupTable(gActive, 'Nessuna pratica in lavorazione.') +
+    '</div>';
+
+  // Sezione 4 (opzionale)
+  if (includeDone7d) {
+    out += '<div style="margin-bottom:8px;"><h3 style="margin:0 0 6px 0; font-size:11pt; color:#166534; display:flex; align-items:center; gap:6px;">🟢 4. Pratiche Concluse negli ultimi 7 giorni (' + gDone7.length + ')</h3>' +
+      renderGroupTable(gDone7, 'Nessuna pratica conclusa negli ultimi 7 giorni.') +
+      '</div>';
+  }
+
+  out += '</div>';
+  return out;
 }

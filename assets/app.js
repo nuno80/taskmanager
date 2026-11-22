@@ -216,7 +216,7 @@ function closeModal() {
 }
 
 function closeAllModals() {
-  ['modal', 'modal-dups', 'modal-log', 'modal-admin'].forEach(function(mid) {
+  ['modal', 'modal-dups', 'modal-log', 'modal-admin', 'modal-briefing'].forEach(function(mid) {
     const el = document.getElementById(mid);
     if (el) el.classList.add('hidden');
   });
@@ -444,28 +444,24 @@ async function saveTask() {
 async function deleteTaskById(id) {
   const t = tasks.find(function(x) { return x.id === id; });
   if (!t || !canEditTask(t)) { alert('Puoi eliminare solo le pratiche della tua sezione.'); return; }
-  if (!confirm('Eliminare definitivamente la pratica ' + (t.code || '') + '?')) return;
 
-  const nextTasks = tasks.filter(function(x) { return x.id !== id; });
-  isSavingTask = true;
+  // 1. Controllo conflitti preventivo
+  const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+  if (!proceed) return;
+
+  if (!confirm('Spostare nel Cestino la pratica ' + (t.code || '') + '? (L\'Amministratore potrà ripristinarla)')) return;
+
   try {
-    await deleteSingleTaskFile(id, nextTasks);
-    tasks = nextTasks;
-    try {
-      await appendAuditLog('ELIMINATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Pratica eliminata definitivamente');
-    } catch (err) {
-      console.warn('Errore scrittura log (non bloccante):', err);
-    }
+    await softDeleteTaskById(id);
   } catch (err) {
-    alert('Impossibile eliminare il file dall\'archivio di rete: ' + err.message + '\n\nLa pratica è stata mantenuta.');
+    alert('Errore spostamento nel Cestino: ' + err.message);
     return;
-  } finally {
-    isSavingTask = false;
   }
+
+  showToast('Pratica ' + (t.code || '') + ' spostata nel Cestino');
   populateYearLists();
   closeModal();
   render();
-  showToast('🗑 Pratica ' + (t.code || '') + ' eliminata');
 }
 
 /* -------------------------------------------------------------------------
@@ -547,6 +543,7 @@ function openAdminModal() {
   if (!currentUser || currentUser.role !== 'admin') return;
   syncAdminRoleAndSection();
   renderAdminUsers();
+  renderAdminTrash();
   document.getElementById('modal-admin').classList.remove('hidden');
 }
 
@@ -873,6 +870,226 @@ async function refreshQuickReconnect() {
   btn.classList.remove('hidden');
 }
 
+/* -------------------------------------------------------------------------
+   CESTINO PRATICHE (ADMIN) & BACKUP INTEGRALE JSON
+   ------------------------------------------------------------------------- */
+function renderAdminTrash() {
+  const cntEl = document.getElementById('admin-trash-count');
+  if (cntEl) cntEl.textContent = deletedTasks.length;
+
+  const tbody = document.getElementById('admin-trash-tbody');
+  if (!tbody) return;
+
+  if (deletedTasks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:var(--muted); font-style:italic;">Nessuna pratica presente nel Cestino.</td></tr>';
+    return;
+  }
+
+  const sorted = deletedTasks.slice().sort(function(a, b) {
+    const da = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
+    const db = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
+    return db - da;
+  });
+
+  tbody.innerHTML = sorted.map(function(t) {
+    const delAt = t.deletedAt ? formatTimestamp(t.deletedAt) : '-';
+    const delBy = t.deletedBy || 'Utente';
+    const secColor = SEC_COLORS[t.sec] || '#0284c7';
+
+    return '<tr>' +
+      '<td style="padding:6px 8px; font-weight:700;">' + escapeHtml(t.code || '-') + '</td>' +
+      '<td style="padding:6px 8px;"><strong style="color:' + secColor + ';">' + escapeHtml(t.sec || '-') + '</strong></td>' +
+      '<td style="padding:6px 8px; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeHtml(t.title || '') + '">' + escapeHtml(t.title || '-') + '</td>' +
+      '<td style="padding:6px 8px; font-size:0.75rem; color:var(--muted);">' + escapeHtml(delBy) + '<br>' + escapeHtml(delAt) + '</td>' +
+      '<td style="padding:6px 8px; text-align:right; white-space:nowrap;">' +
+      '<button type="button" class="std-btn btn-admin" style="padding:3px 7px; font-size:0.74rem; margin-right:4px;" data-trash-action="restore" data-id="' + escapeHtml(t.id) + '" title="Ripristina nel Kanban">♻️ Ripristina</button>' +
+      '<button type="button" class="std-btn btn-danger" style="padding:3px 7px; font-size:0.74rem;" data-trash-action="purge" data-id="' + escapeHtml(t.id) + '" title="Elimina definitivamente da disco">✕ Elimina</button>' +
+      '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function exportFullBackupJson() {
+  if (!currentUser || currentUser.role !== 'admin') {
+    alert('Operazione riservata all\'Amministratore.');
+    return;
+  }
+  try {
+    await syncAllFromStorage(true, false);
+    const snapshot = {
+      app: 'OI_TASK_TRACKER',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      exportedBy: currentUser ? currentUser.name : 'Admin',
+      tasks: tasks.concat(deletedTasks),
+      users: users,
+      logs: logs
+    };
+
+    const jsonStr = JSON.stringify(snapshot, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const now = new Date();
+    const pad = function(n) { return String(n).padStart(2, '0'); };
+    const fname = 'backup_OI_' + now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + '_' + pad(now.getHours()) + pad(now.getMinutes()) + '.json';
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+
+    try {
+      await appendAuditLog('ADMIN', 'ADMIN', 'Backup Completo', 'Esportato snapshot JSON (' + snapshot.tasks.length + ' pratiche, ' + snapshot.users.length + ' utenti)');
+    } catch (e) {}
+
+    showToast('Backup completo salvato: ' + fname);
+  } catch (err) {
+    alert('Errore generazione backup: ' + err.message);
+  }
+}
+
+async function handleRestoreBackupJson(e) {
+  if (!currentUser || currentUser.role !== 'admin') {
+    alert('Operazione riservata all\'Amministratore.');
+    return;
+  }
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+
+    if (!data || data.app !== 'OI_TASK_TRACKER' || !Array.isArray(data.tasks)) {
+      alert('File non valido: non è un archivio di backup completo conforme a Task Tracker Uff. OI.');
+      return;
+    }
+
+    const taskCount = data.tasks.length;
+    const userCount = Array.isArray(data.users) ? data.users.length : 0;
+    const logCount = Array.isArray(data.logs) ? data.logs.length : 0;
+    const expDate = data.exportedAt ? formatTimestamp(data.exportedAt) : 'data sconosciuta';
+
+    const msg = 'Ripristinare questo backup?\n\n' +
+      '• Data backup: ' + expDate + '\n' +
+      '• Pratiche da importare: ' + taskCount + '\n' +
+      '• Utenti da importare: ' + userCount + '\n' +
+      '• Registri di log: ' + logCount + '\n\n' +
+      'ATTENZIONE: Le pratiche e gli utenti con lo stesso ID verranno aggiornati con i dati del file.';
+
+    if (!confirm(msg)) return;
+
+    isSavingTask = true;
+    try {
+      // 1. Ripristino utenti
+      if (Array.isArray(data.users) && data.users.length > 0) {
+        users = data.users;
+        await saveUsersToStorage();
+      }
+
+      // 2. Ripristino pratiche (attive e cestino)
+      for (let i = 0; i < data.tasks.length; i++) {
+        const item = data.tasks[i];
+        if (item && item.id) {
+          item.sec = sanitizeSection(item.sec);
+          item.dest = normalizeApprover(item.dest);
+          await saveSingleTask(item);
+        }
+      }
+
+      // 3. Ripristino registri di audit
+      if (Array.isArray(data.logs) && data.logs.length > 0) {
+        if (storageMode === 'fs' && logsDirHandle) {
+          for (let j = 0; j < data.logs.length; j++) {
+            const entry = data.logs[j];
+            if (entry && entry.id) {
+              try { await writeJsonFile(logsDirHandle, entry.id + '.json', entry); } catch (e) {}
+            }
+          }
+        } else {
+          logs = data.logs;
+          try { localStorage.setItem(LOCAL_LOGS_KEY, JSON.stringify(logs)); } catch (e) {}
+        }
+      }
+
+      try {
+        await appendAuditLog('ADMIN', 'ADMIN', 'Ripristino Backup', 'Ripristinato backup integrale del ' + expDate + ' (' + taskCount + ' pratiche)');
+      } catch (e) {}
+    } finally {
+      isSavingTask = false;
+    }
+
+    await syncAllFromStorage(true, true);
+    renderAdminUsers();
+    renderAdminTrash();
+    render();
+    alert('Ripristino completato con successo!');
+  } catch (err) {
+    alert('Errore durante il ripristino del backup: ' + err.message);
+  } finally {
+    e.target.value = '';
+  }
+}
+
+/* -------------------------------------------------------------------------
+   PUNTO DI SITUAZIONE (CONTROLLER MODALE & AZIONI)
+   ------------------------------------------------------------------------- */
+function openBriefingModal() {
+  const secEl = document.getElementById('briefing-sec');
+  if (secEl) {
+    secEl.value = activeSecFilter || '';
+  }
+  renderBriefingPreview();
+  const modal = document.getElementById('modal-briefing');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function renderBriefingPreview() {
+  const preview = document.getElementById('briefing-preview');
+  if (!preview) return;
+  const secVal = document.getElementById('briefing-sec') ? document.getElementById('briefing-sec').value : '';
+  const incDone = document.getElementById('briefing-inc-done') ? document.getElementById('briefing-inc-done').checked : true;
+  preview.innerHTML = buildBriefingHtml(secVal, incDone);
+}
+
+async function copyBriefingToClipboard() {
+  const el = document.getElementById('briefing-preview');
+  if (!el) return;
+
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      const htmlBlob = new Blob([el.innerHTML], { type: 'text/html' });
+      const textBlob = new Blob([el.innerText], { type: 'text/plain' });
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob })]);
+    } else {
+      throw new Error('ClipboardItem API non disponibile');
+    }
+  } catch (e) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+  }
+
+  showToast('Punto di Situazione copiato! Incolla in Word o Outlook (Ctrl+V)');
+}
+
+function printBriefing() {
+  document.body.classList.add('printing-briefing');
+  window.print();
+  const cleanup = function() {
+    document.body.classList.remove('printing-briefing');
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  setTimeout(cleanup, 1200);
+}
+
 function initApp() {
   let savedTheme = 'light';
   try { savedTheme = localStorage.getItem(THEME_KEY) || 'light'; } catch (e) {}
@@ -884,7 +1101,7 @@ function initApp() {
   // Chiusura rapida modali con tasto ESC
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-      const anyOpen = ['modal', 'modal-dups', 'modal-log', 'modal-admin'].some(function(id) {
+      const anyOpen = ['modal', 'modal-dups', 'modal-log', 'modal-admin', 'modal-briefing'].some(function(id) {
         const el = document.getElementById(id);
         return el && !el.classList.contains('hidden');
       });
@@ -991,6 +1208,50 @@ function initApp() {
 
   document.getElementById('btn-new-task').addEventListener('click', function() { openModal(null); });
   document.getElementById('btn-sync-now').addEventListener('click', function() { syncAllFromStorage(false, true); });
+
+  // Filtri Rapidi 1-clic (Mia Sez., Attesa PCN, Verifica -7gg)
+  const btnQfMySec = document.getElementById('btn-qf-mysec');
+  if (btnQfMySec) {
+    btnQfMySec.addEventListener('click', function() {
+      if (!currentUser || !VALID_SECTIONS.includes(currentUser.sec)) return;
+      const cur = getActiveSectionFilter();
+      setActiveSectionFilter(cur === currentUser.sec ? '' : currentUser.sec);
+      render();
+    });
+  }
+  const btnQfPcn = document.getElementById('btn-qf-pcn');
+  if (btnQfPcn) {
+    btnQfPcn.addEventListener('click', function() {
+      quickFilterPcn = !quickFilterPcn;
+      render();
+    });
+  }
+  const btnQfMid = document.getElementById('btn-qf-mid');
+  if (btnQfMid) {
+    btnQfMid.addEventListener('click', function() {
+      quickFilterMid = !quickFilterMid;
+      render();
+    });
+  }
+
+  // Punto di Situazione (Word / Outlook / Stampa)
+  const btnOpenBriefing = document.getElementById('btn-open-briefing');
+  if (btnOpenBriefing) btnOpenBriefing.addEventListener('click', openBriefingModal);
+  const btnOpenBriefingStats = document.getElementById('btn-open-briefing-stats');
+  if (btnOpenBriefingStats) btnOpenBriefingStats.addEventListener('click', openBriefingModal);
+  const btnCloseBriefing = document.getElementById('btn-close-briefing');
+  if (btnCloseBriefing) btnCloseBriefing.addEventListener('click', function() {
+    document.getElementById('modal-briefing').classList.add('hidden');
+  });
+  const btnCopyBriefing = document.getElementById('btn-copy-briefing');
+  if (btnCopyBriefing) btnCopyBriefing.addEventListener('click', copyBriefingToClipboard);
+  const btnPrintBriefing = document.getElementById('btn-print-briefing');
+  if (btnPrintBriefing) btnPrintBriefing.addEventListener('click', printBriefing);
+  const briefingSecEl = document.getElementById('briefing-sec');
+  if (briefingSecEl) briefingSecEl.addEventListener('change', renderBriefingPreview);
+  const briefingIncDoneEl = document.getElementById('briefing-inc-done');
+  if (briefingIncDoneEl) briefingIncDoneEl.addEventListener('change', renderBriefingPreview);
+
   document.getElementById('btn-open-log').addEventListener('click', openLogModal);
   document.getElementById('btn-close-log').addEventListener('click', function() { document.getElementById('modal-log').classList.add('hidden'); });
   document.getElementById('btn-export-log-csv').addEventListener('click', exportLogCSV);
@@ -1028,6 +1289,77 @@ function initApp() {
   document.getElementById('btn-admin-import-excel').addEventListener('click', function() { document.getElementById('excel-file').click(); });
   document.getElementById('excel-file').addEventListener('change', handleAdminExcelMigration);
   document.getElementById('btn-export-csv').addEventListener('click', exportTasksCSV);
+
+  // Backup Completo & Ripristino Integrale JSON
+  const btnBackupJson = document.getElementById('btn-admin-backup-json');
+  if (btnBackupJson) btnBackupJson.addEventListener('click', exportFullBackupJson);
+  const btnRestoreJson = document.getElementById('btn-admin-restore-json');
+  if (btnRestoreJson) btnRestoreJson.addEventListener('click', function() {
+    document.getElementById('backup-json-file').click();
+  });
+  const fileRestoreJson = document.getElementById('backup-json-file');
+  if (fileRestoreJson) fileRestoreJson.addEventListener('change', handleRestoreBackupJson);
+
+  // Cestino Pratiche Eliminate (Admin): Ripristina / Elimina definitivamente / Svuota > 30gg
+  const trashTbody = document.getElementById('admin-trash-tbody');
+  if (trashTbody) {
+    trashTbody.addEventListener('click', async function(e) {
+      const btn = e.target.closest('[data-trash-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-trash-action');
+      const id = btn.getAttribute('data-id');
+      const t = deletedTasks.find(function(x) { return x.id === id; });
+      if (!t) return;
+
+      if (act === 'restore') {
+        try {
+          await restoreTaskFromTrash(id);
+          populateYearLists();
+          renderAdminTrash();
+          render();
+          showToast('Pratica ' + (t.code || '') + ' ripristinata dal Cestino');
+        } catch (err) {
+          alert('Errore ripristino pratica: ' + err.message);
+        }
+      } else if (act === 'purge') {
+        if (!confirm('ATTENZIONE: Eliminare DEFINITIVAMENTE la pratica ' + (t.code || '') + '?\n\nQuesta operazione cancella il file da disco e NON può essere annullata.')) return;
+        try {
+          await purgeTaskPermanently(id);
+          renderAdminTrash();
+          showToast('Pratica ' + (t.code || '') + ' eliminata definitivamente');
+        } catch (err) {
+          alert('Errore eliminazione definitiva: ' + err.message);
+        }
+      }
+    });
+  }
+
+  const btnPurgeOld = document.getElementById('btn-purge-old-trash');
+  if (btnPurgeOld) {
+    btnPurgeOld.addEventListener('click', async function() {
+      const cutoff = Date.now() - (30 * 86400000);
+      const count = deletedTasks.filter(function(t) {
+        if (!t.deletedAt) return false;
+        const dt = new Date(t.deletedAt).getTime();
+        return !isNaN(dt) && dt < cutoff;
+      }).length;
+
+      if (count === 0) {
+        alert('Nessuna pratica nel Cestino è più vecchia di 30 giorni.');
+        return;
+      }
+
+      if (!confirm('ATTENZIONE: Eliminare definitivamente ' + count + ' pratiche presenti nel Cestino da oltre 30 giorni?\n\nI rispettivi file verranno cancellati dal disco.')) return;
+
+      try {
+        const purged = await purgeExpiredTrash(30);
+        renderAdminTrash();
+        showToast('Eliminate definitivamente ' + purged + ' pratiche scadute');
+      } catch (err) {
+        alert('Errore pulizia pratiche: ' + err.message);
+      }
+    });
+  }
 
   document.getElementById('admin-users-tbody').addEventListener('click', async function(e) {
     const btn = e.target.closest('[data-adm-action]'); if (!btn) return;

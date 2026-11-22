@@ -145,6 +145,11 @@
       <span class="rail-item-label" id="rail-sync-label">Sincronizza</span>
     </button>
 
+    <button type="button" class="rail-item" id="btn-open-briefing" title="Punto di Situazione (Word / Outlook / Stampa)">
+      <span class="rail-item-icon">📄</span>
+      <span class="rail-item-label">Situazione</span>
+    </button>
+
     <button type="button" class="rail-item" id="btn-export-csv" title="Esporta Riepilogo Excel">
       <span class="rail-item-icon">⬇️</span>
       <span class="rail-item-label">Esporta Excel</span>
@@ -198,6 +203,9 @@
         <option value="ONU">🟣 ONU</option>
         <option value="FOI">🟢 FOI</option>
       </select>
+      <button type="button" id="btn-qf-mysec" class="pill-ctrl hidden" title="Filtra solo la tua sezione">👤 Mia Sez.</button>
+      <button type="button" id="btn-qf-pcn" class="pill-ctrl" title="Pratiche consegnate a Prot./PCN ma non ancora rientrate">📤 Attesa PCN (<span id="qf-pcn-cnt">0</span>)</button>
+      <button type="button" id="btn-qf-mid" class="pill-ctrl" title="Pratiche in finestra di verifica intermedia (-7gg)">🔍 Verif. -7gg (<span id="qf-mid-cnt">0</span>)</button>
       <select id="f-tipo" title="Filtra per tipologia">
         <option value="">Tipologie</option>
         <option value="Appunto">Appunto</option>
@@ -319,6 +327,7 @@
           </select>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" id="btn-open-briefing-stats" class="std-btn btn-excel">📄 Riepilogo Riunione</button>
           <button type="button" id="btn-check-dups" class="std-btn btn-admin"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true" style="margin-right:6px;"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 5.2A2.5 2.5 0 0 0 13 3H6a2.5 2.5 0 0 0-2.5 2.5v7A2.5 2.5 0 0 0 6 15"/><path d="M11.5 14.5h6M11.5 18h6" stroke-linecap="round"/></svg>Controlla Duplicati</button>
           <button type="button" id="btn-print-stats" class="std-btn btn-primary">🖨️ Stampa / PDF</button>
         </div>
@@ -632,6 +641,52 @@
       </table>
     </div>
 
+    <!-- SEZIONE CESTINO PRATICHE (SOFT DELETE) -->
+    <div id="admin-trash-section" style="background:var(--surface-sub); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <h4 style="font-size:0.92rem; margin:0; display:flex; align-items:center; gap:6px;">
+            🗑️ Cestino Pratiche Eliminate (<span id="admin-trash-count">0</span>)
+          </h4>
+          <div style="font-size:0.75rem; color:var(--muted);">Le pratiche eliminate rimangono nel Cestino e possono essere ripristinate solo dall'Amministratore.</div>
+        </div>
+        <button type="button" id="btn-purge-old-trash" class="std-btn btn-danger" style="font-size:0.78rem; padding:5px 10px;">
+          🧹 Svuota &gt; 30 giorni
+        </button>
+      </div>
+      <div style="max-height:28vh; overflow-y:auto; border:1px solid var(--border); border-radius:6px; background:var(--surface);">
+        <table style="width:100%; border-collapse:collapse; font-size:0.8rem;">
+          <thead>
+            <tr style="background:var(--surface-sub); border-bottom:1px solid var(--border); text-align:left;">
+              <th style="padding:6px 8px;">Codice</th>
+              <th style="padding:6px 8px;">Sez.</th>
+              <th style="padding:6px 8px;">Oggetto</th>
+              <th style="padding:6px 8px;">Eliminata da / Data</th>
+              <th style="padding:6px 8px; text-align:right;">Azioni</th>
+            </tr>
+          </thead>
+          <tbody id="admin-trash-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SEZIONE BACKUP & RIPRISTINO COMPLETO JSON -->
+    <div id="admin-backup-section" style="background:var(--surface-sub); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px;">
+      <h4 style="font-size:0.92rem; margin:0;">💾 Backup &amp; Ripristino Integrale Database (JSON)</h4>
+      <div style="font-size:0.75rem; color:var(--muted);">
+        Salva uno snapshot completo (pratiche attive, cestino, utenti e cronologia) oppure ripristina un backup precedente.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" id="btn-admin-backup-json" class="std-btn btn-primary" style="font-size:0.82rem;">
+          💾 Scarica Backup Completo (.json)
+        </button>
+        <button type="button" id="btn-admin-restore-json" class="std-btn btn-admin" style="font-size:0.82rem;">
+          ♻️ Ripristina da Backup (.json)
+        </button>
+        <input type="file" id="backup-json-file" accept=".json" class="hidden">
+      </div>
+    </div>
+
     <div style="background:var(--surface-sub); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
       <div style="font-size:0.8rem; color:var(--muted);">
         <b style="color:var(--text);">Importazione Dati &amp; Backup</b><br>
@@ -644,6 +699,33 @@
         <input type="file" id="excel-file" accept=".xlsm,.xlsx" class="hidden">
       </div>
     </div>
+  </div>
+</div>
+
+<!-- MODALE PUNTO DI SITUAZIONE (WORD / OUTLOOK / STAMPA) -->
+<div id="modal-briefing" class="modal-backdrop hidden">
+  <div class="modal modal-wide" style="max-width:980px; width:95vw;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h3 style="margin:0;">📄 Punto di Situazione — Pronto per Word / Outlook / Stampa</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" id="btn-copy-briefing" class="std-btn btn-primary">📋 Copia per Word / Outlook</button>
+        <button type="button" id="btn-print-briefing" class="std-btn btn-excel">🖨️ Stampa / PDF</button>
+        <button type="button" id="btn-close-briefing" class="std-btn" title="Chiudi (ESC)">Chiudi</button>
+      </div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; background:var(--surface-sub); padding:8px 12px; border-radius:8px; border:1px solid var(--border);">
+      <select id="briefing-sec" class="pill-ctrl">
+        <option value="">Tutte le Sezioni (Ufficio OI)</option>
+        <option value="NATO">Solo Sezione NATO</option>
+        <option value="UE">Solo Sezione UE</option>
+        <option value="ONU">Solo Sezione ONU</option>
+        <option value="FOI">Solo Sezione FOI</option>
+      </select>
+      <label style="font-size:0.81rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="briefing-inc-done" checked> Includi concluse negli ultimi 7 giorni
+      </label>
+    </div>
+    <div id="briefing-preview" class="briefing-sheet"></div>
   </div>
 </div>
 

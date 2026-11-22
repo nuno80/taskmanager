@@ -837,9 +837,63 @@ tr:hover { background: var(--table-hover); }
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 
+/* Stile Filtri Rapidi attivi (.toggle-on) */
+.pill-ctrl.toggle-on {
+  background: var(--primary-light, #eff6ff) !important;
+  border-color: var(--primary, #2563eb) !important;
+  color: var(--primary, #1d4ed8) !important;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--primary, #2563eb) inset;
+}
+[data-theme="dark"] .pill-ctrl.toggle-on {
+  background: rgba(59, 130, 246, 0.22) !important;
+  border-color: #3b82f6 !important;
+  color: #93c5fd !important;
+  box-shadow: 0 0 0 1px #3b82f6 inset;
+}
+
+/* Foglio Anteprima Punto di Situazione (sempre sfondo chiaro A4) */
+.briefing-sheet {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  padding: 24px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  max-height: 68vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
 @media print {
   .app-rail, .topbar, .stats-toolbar button, .auth-overlay, .modal-backdrop, .toast, .crit-filter-banner, .popover-dropdown { display: none !important; }
   body, .workspace { height: auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
   main { padding: 0 !important; overflow: visible !important; }
   .kpi-card, .chart-panel, .stats-toolbar { box-shadow: none !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; background: #fff !important; color: #000 !important; }
+
+  /* Stampa isolata Punto di Situazione */
+  body.printing-briefing .app-rail,
+  body.printing-briefing .topbar,
+  body.printing-briefing #app-main,
+  body.printing-briefing .crit-filter-banner,
+  body.printing-briefing .modal-backdrop:not(#modal-briefing),
+  body.printing-briefing #modal-briefing > .modal > div:not(#briefing-preview) {
+    display: none !important;
+  }
+  body.printing-briefing,
+  body.printing-briefing #modal-briefing,
+  body.printing-briefing #modal-briefing .modal,
+  body.printing-briefing #briefing-preview {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
 }

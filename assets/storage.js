@@ -20,7 +20,7 @@ function isAdminSetupMode() {
 // Stato archivio
 let storageMode = 'none';
 let rootDirHandle = null, tasksDirHandle = null, logsDirHandle = null;
-let tasks = [], users = [], logs = [];
+let tasks = [], deletedTasks = [], users = [], logs = [];
 let currentUser = null;
 let isSyncing = false;
 let isSavingTask = false;
@@ -106,7 +106,7 @@ function computeNextCodeFromList(taskList, sec, yearStr) {
 
 async function generateSafeAutoCode(sec, yearStr) {
   if (storageMode === 'fs' && tasksDirHandle) {
-    const freshList = tasks.slice();
+    const freshList = tasks.concat(deletedTasks);
     try {
       for await (const [name, handle] of tasksDirHandle.entries()) {
         if (handle.kind === 'file' && name.endsWith('.json')) {
@@ -119,7 +119,7 @@ async function generateSafeAutoCode(sec, yearStr) {
       return computeNextCodeFromList(freshList, sec, yearStr);
     } catch (e) {}
   }
-  return computeNextCodeFromList(tasks, sec, yearStr);
+  return computeNextCodeFromList(tasks.concat(deletedTasks), sec, yearStr);
 }
 
 // Verifica anti-collisione post-scrittura su rete LAN: se due utenti hanno
@@ -266,6 +266,7 @@ function resetFsHandles() {
   storageMode = 'none';
   rootDirHandle = tasksDirHandle = logsDirHandle = null;
   taskFileCache.clear();
+  deletedTasks = [];
   hasRenderedOnce = false;
 }
 
@@ -472,7 +473,7 @@ async function saveSingleTask(taskObj, nextTasksForLocal) {
       taskFileCache.delete(fname);
     }
   } else {
-    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks;
+    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks.concat(deletedTasks);
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(payload));
   }
 }
@@ -483,7 +484,7 @@ async function deleteSingleTaskFile(taskId, nextTasksForLocal) {
     await deleteFileFromDir(tasksDirHandle, fname);
     taskFileCache.delete(fname);
   } else {
-    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks;
+    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks.concat(deletedTasks);
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(payload));
   }
 }
@@ -549,13 +550,18 @@ async function syncAllFromStorage(includeLogs, forceRender) {
         }
       }
 
-      const loadedTasks = [];
+      const loadedActive = [];
+      const loadedDeleted = [];
       taskFileCache.forEach(function(entry) {
-        if (entry && entry.task) loadedTasks.push(entry.task);
+        if (entry && entry.task) {
+          if (entry.task.deleted) loadedDeleted.push(entry.task);
+          else loadedActive.push(entry.task);
+        }
       });
 
-      const backfilled = backfillMissingCodes(loadedTasks);
-      tasks = loadedTasks;
+      const backfilled = backfillMissingCodes(loadedActive.concat(loadedDeleted));
+      tasks = loadedActive;
+      deletedTasks = loadedDeleted;
 
       // Persisti eventuali codici generati ex-novo solo per pratiche modificabili dall'utente corrente
       if (backfilled.length > 0 && currentUser) {
@@ -590,9 +596,10 @@ async function syncAllFromStorage(includeLogs, forceRender) {
         t.dest = normalizeApprover(t.dest);
       });
       const backfilled = backfillMissingCodes(localList);
-      tasks = localList;
+      tasks = localList.filter(function(x) { return !x.deleted; });
+      deletedTasks = localList.filter(function(x) { return Boolean(x.deleted); });
       if (backfilled.length > 0) {
-        try { localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks)); } catch (e) {}
+        try { localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks.concat(deletedTasks))); } catch (e) {}
       }
       if (includeLogs) { try { logs = JSON.parse(localStorage.getItem(LOCAL_LOGS_KEY) || '[]'); } catch (e) { logs = []; } }
       if (statusDot) { statusDot.textContent = '💻 Locale (Test)'; statusDot.style.color = '#fde047'; }
@@ -679,3 +686,116 @@ function performLogin() {
 
 function canEditSection(sec) { return currentUser && (currentUser.role === 'admin' || currentUser.sec === sec); }
 function canEditTask(t) { return !t || canEditSection(t.sec); }
+
+/* -------------------------------------------------------------------------
+   GESTIONE CESTINO (SOFT DELETE) & OPERAZIONI AMMINISTRATORE
+   ------------------------------------------------------------------------- */
+async function softDeleteTaskById(id) {
+  const t = tasks.find(function(x) { return x.id === id; });
+  if (!t) return;
+  if (!canEditTask(t)) {
+    throw new Error('Permesso negato: puoi eliminare solo le pratiche della tua sezione.');
+  }
+
+  t.deleted = true;
+  t.deletedBy = currentUser ? (currentUser.name + ' (' + currentUser.sec + ')') : 'Utente';
+  t.deletedAt = new Date().toISOString();
+
+  isSavingTask = true;
+  try {
+    tasks = tasks.filter(function(x) { return x.id !== id; });
+    deletedTasks.unshift(t);
+    await saveSingleTask(t, tasks.concat(deletedTasks));
+    try {
+      await appendAuditLog('ELIMINATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Spostata nel Cestino');
+    } catch (err) {
+      console.warn('Errore log cestino (non bloccante):', err);
+    }
+  } finally {
+    isSavingTask = false;
+  }
+}
+
+async function restoreTaskFromTrash(id) {
+  if (!currentUser || currentUser.role !== 'admin') {
+    throw new Error('Operazione riservata all\'Amministratore.');
+  }
+  const t = deletedTasks.find(function(x) { return x.id === id; });
+  if (!t) return;
+
+  delete t.deleted;
+  delete t.deletedBy;
+  delete t.deletedAt;
+  t.updatedBy = currentUser.name + ' (ADMIN)';
+  t.updatedAt = new Date().toISOString();
+
+  isSavingTask = true;
+  try {
+    deletedTasks = deletedTasks.filter(function(x) { return x.id !== id; });
+    tasks.unshift(t);
+    await saveSingleTask(t, tasks.concat(deletedTasks));
+    try {
+      await appendAuditLog('ADMIN', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Pratica ripristinata dal Cestino');
+    } catch (err) {
+      console.warn('Errore log ripristino (non bloccante):', err);
+    }
+  } finally {
+    isSavingTask = false;
+  }
+}
+
+async function purgeTaskPermanently(id) {
+  if (!currentUser || currentUser.role !== 'admin') {
+    throw new Error('Operazione riservata all\'Amministratore.');
+  }
+  const t = deletedTasks.find(function(x) { return x.id === id; });
+  if (!t) return;
+
+  isSavingTask = true;
+  try {
+    deletedTasks = deletedTasks.filter(function(x) { return x.id !== id; });
+    await deleteSingleTaskFile(id, tasks.concat(deletedTasks));
+    try {
+      await appendAuditLog('ADMIN', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Pratica eliminata definitivamente dal Cestino');
+    } catch (err) {
+      console.warn('Errore log eliminazione definitiva (non bloccante):', err);
+    }
+  } finally {
+    isSavingTask = false;
+  }
+}
+
+async function purgeExpiredTrash(days) {
+  if (!currentUser || currentUser.role !== 'admin') {
+    throw new Error('Operazione riservata all\'Amministratore.');
+  }
+  const cutoff = Date.now() - (days * 86400000);
+  const expired = deletedTasks.filter(function(t) {
+    if (!t.deletedAt) return false;
+    const dt = new Date(t.deletedAt).getTime();
+    return !isNaN(dt) && dt < cutoff;
+  });
+
+  if (expired.length === 0) {
+    return 0;
+  }
+
+  isSavingTask = true;
+  try {
+    for (let i = 0; i < expired.length; i++) {
+      const t = expired[i];
+      deletedTasks = deletedTasks.filter(function(x) { return x.id !== t.id; });
+      try {
+        await deleteSingleTaskFile(t.id, tasks.concat(deletedTasks));
+      } catch (e) {
+        console.warn('Errore eliminazione file scaduto:', t.id, e);
+      }
+    }
+    try {
+      await appendAuditLog('ADMIN', 'ADMIN', 'Pulizia Cestino', 'Eliminate definitivamente ' + expired.length + ' pratiche con più di ' + days + ' giorni');
+    } catch (err) {}
+  } finally {
+    isSavingTask = false;
+  }
+  return expired.length;
+}
