@@ -1,0 +1,10 @@
+# Database e dati locali
+DB/
+old/
+*.csv
+
+# File di sistema e temporanei
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak

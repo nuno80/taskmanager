@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Tracker Operativo Uff. OI — Setup Amministratore</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 110'%3E%3Cpath d='M50 4 L92 18 L92 54 C92 80 74 98 50 106 C26 98 8 80 8 54 L8 18 Z' fill='%230f1b38' stroke='%23eab308' stroke-width='6'/%3E%3Cpath d='M50 18 L57 43 L82 50 L57 57 L50 82 L43 57 L18 50 L43 43 Z' fill='%2338bdf8'/%3E%3Ccircle cx='50' cy='50' r='8' fill='%23eab308'/%3E%3Cpath d='M56 64 L66 74 L84 52' fill='none' stroke='%2322c55e' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<!-- SCHERMATA DI AVVIO: CONNESSIONE ARCHIVIO CONDIVISO & LOGIN UTENTE -->
+<div id="auth-overlay" class="auth-overlay">
+  <div class="auth-box">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <div class="auth-header">
+        <svg class="app-emblem" viewBox="0 0 120 132" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="goldGradA" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#fde047"/><stop offset="50%" stop-color="#eab308"/><stop offset="100%" stop-color="#a16207"/></linearGradient>
+            <linearGradient id="shieldBgA" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#1e293b"/><stop offset="100%" stop-color="#090d16"/></linearGradient>
+          </defs>
+          <path d="M60 4 L112 20 L112 64 C112 96 90 118 60 128 C30 118 8 96 8 64 L8 20 Z" fill="url(#shieldBgA)" stroke="url(#goldGradA)" stroke-width="5"/>
+          <circle cx="26" cy="34" r="5" fill="#2563eb"/><circle cx="94" cy="34" r="5" fill="#eab308"/><circle cx="26" cy="84" r="5" fill="#06b6d4"/><circle cx="94" cy="84" r="5" fill="#10b981"/>
+          <polygon points="60,28 66,56 94,62 66,68 60,96 54,68 26,62 54,56" fill="#e2e8f0"/>
+          <path d="M64 84 L71 91 L85 76" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <h2 style="font-size:1.15rem;">TASK TRACKER UFF. OI</h2>
+          <div style="font-size:0.7rem; color:#d97706; font-weight:700; letter-spacing:0.8px;">ARCHIVIO MULTI-UTENTE IN RETE LOCALE</div>
+          <div style="display:inline-block; margin-top:4px; padding:2px 8px; border-radius:4px; background:#dc2626; color:#ffffff; font-size:0.72rem; font-weight:700; letter-spacing:0.5px;">⚙️ MODALITÀ SETUP AMMINISTRATORE</div>
+        </div>
+      </div>
+      <button type="button" id="btn-theme-auth" class="pill-ctrl" title="Cambia tema Chiaro/Scuro">🌙 Scuro</button>
+    </div>
+
+    <div id="auth-step-folder" style="display:flex; flex-direction:column; gap:12px;">
+      <div class="auth-info">
+        <b>Passo 1 — Collega l'Archivio dell'Ufficio</b><br>
+        Seleziona la <b>cartella condivisa sul server locale</b> (es. <code>\\Server\Uff_OI\TaskDB</code>).<br>
+        Ogni pratica viene salvata come file indipendente con codice automatico (es. <code>N26-001</code>).
+      </div>
+      <button type="button" id="btn-connect-folder" class="btn-add" style="padding:11px; font-size:0.92rem; width:100%;">📂 Connetti Cartella Condivisa in Rete</button>
+      <button type="button" id="btn-use-local-fallback" class="std-btn" style="font-size:0.78rem; color:var(--muted);">Usa solo memoria locale di questo browser (modalità test)</button>
+      <div id="folder-error" class="auth-error hidden"></div>
+    </div>
+
+    <div id="auth-step-login" class="hidden" style="display:flex; flex-direction:column; gap:12px;">
+      <div class="auth-info" id="connected-folder-info"></div>
+      <div class="form-group">
+        <label>Seleziona Utente</label>
+        <select id="login-user-select" class="std-btn" style="padding:10px; font-size:0.9rem; width:100%;"></select>
+      </div>
+      <div class="form-group">
+        <label>PIN di Accesso</label>
+        <input type="password" id="login-pin" class="std-btn" placeholder="Inserisci PIN..." style="padding:10px; font-size:0.9rem; width:100%;">
+      </div>
+      <div id="login-error" class="auth-error hidden"></div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="btn-change-folder" class="std-btn" style="flex:0.4;">◀ Cartella</button>
+        <button type="button" id="btn-do-login" class="btn-add" style="flex:1; padding:10px; font-size:0.92rem;">🔐 Accedi</button>
+      </div>
+      <div id="first-run-hint" class="hidden" style="font-size:0.76rem; color:var(--muted); text-align:center;">
+        Primo avvio rilevato: accedi con <b>Admin</b> (PIN iniziale: <b>0000</b>) e crea gli utenti dalla Dashboard Admin.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BARRA LATERALE UNIFICATA (COMPRIMIBILE / ESPANDIBILE) -->
+<nav class="app-rail collapsed" id="app-rail" aria-label="Navigazione principale">
+  <div class="rail-header">
+    <div class="rail-brand" title="Ufficio OI — Task Tracker">
+      <svg class="app-emblem" viewBox="0 0 120 132" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="goldGradR" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#fde047"/><stop offset="50%" stop-color="#eab308"/><stop offset="100%" stop-color="#a16207"/></linearGradient>
+          <linearGradient id="shieldBgR" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#1e293b"/><stop offset="100%" stop-color="#090d16"/></linearGradient>
+        </defs>
+        <path d="M60 4 L112 20 L112 64 C112 96 90 118 60 128 C30 118 8 96 8 64 L8 20 Z" fill="url(#shieldBgR)" stroke="url(#goldGradR)" stroke-width="5"/>
+        <circle cx="26" cy="34" r="5" fill="#2563eb"/><circle cx="94" cy="34" r="5" fill="#eab308"/><circle cx="26" cy="84" r="5" fill="#06b6d4"/><circle cx="94" cy="84" r="5" fill="#10b981"/>
+        <polygon points="60,28 66,56 94,62 66,68 60,96 54,68 26,62 54,56" fill="#e2e8f0"/>
+        <path d="M64 84 L71 91 L85 76" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="rail-brand-text">
+        <span class="rail-brand-title">Ufficio OI</span>
+        <span class="rail-brand-sub">TASK TRACKER</span>
+      </div>
+    </div>
+    <button type="button" class="rail-toggle-btn" id="btn-toggle-rail" title="Espandi / Comprimi barra">
+      <span class="toggle-icon">▶</span>
+    </button>
+  </div>
+
+  <div class="rail-group">
+    <div class="rail-section-label">Viste</div>
+    <button type="button" class="rail-item active" id="rail-board" title="Kanban Board">
+      <span class="rail-item-icon">☑️</span>
+      <span class="rail-item-label">Kanban</span>
+    </button>
+    <button type="button" class="rail-item" id="rail-list" title="Vista Tabella">
+      <span class="rail-item-icon">📋</span>
+      <span class="rail-item-label">Tabella</span>
+    </button>
+    <button type="button" class="rail-item" id="rail-cal" title="Calendario (30 min)">
+      <span class="rail-item-icon">📅</span>
+      <span class="rail-item-label">Calendario</span>
+    </button>
+    <button type="button" class="rail-item" id="rail-stats" title="Statistiche & Grafici">
+      <span class="rail-item-icon">📊</span>
+      <span class="rail-item-label">Statistiche</span>
+    </button>
+  </div>
+
+  <div class="rail-divider"></div>
+
+  <div class="rail-group">
+    <div class="rail-section-label">Strumenti</div>
+    <div style="position:relative;">
+      <button type="button" class="rail-item" id="rail-btn-year" title="Archivio per Anno">
+        <span class="rail-item-icon">📁</span>
+        <span class="rail-item-label" id="rail-year-label">Archivio Anno</span>
+        <span class="rail-item-badge hidden" id="rail-year-badge"></span>
+      </button>
+      <div id="popover-years" class="popover-dropdown hidden">
+        <div class="popover-title">Archivio Anno</div>
+        <div id="popover-year-list"></div>
+      </div>
+    </div>
+
+    <button type="button" class="rail-item" id="btn-open-log" title="Registro Cronologia (Audit Log)">
+      <span class="rail-item-icon">📜</span>
+      <span class="rail-item-label">Audit Log</span>
+    </button>
+
+    <button type="button" class="rail-item" id="btn-rail-dups" title="Controlla Duplicati">
+      <span class="rail-item-icon">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true" style="width:18px;height:18px;"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 5.2A2.5 2.5 0 0 0 13 3H6a2.5 2.5 0 0 0-2.5 2.5v7A2.5 2.5 0 0 0 6 15"/><path d="M11.5 14.5h6M11.5 18h6" stroke-linecap="round"/></svg>
+      </span>
+      <span class="rail-item-label">Duplicati</span>
+    </button>
+
+    <button type="button" class="rail-item" id="btn-sync-now" title="Sincronizza subito con la rete">
+      <span class="rail-item-icon" style="position:relative;">
+        🔄<span class="sync-dot-mini" id="sync-dot-indicator"></span>
+      </span>
+      <span class="rail-item-label" id="rail-sync-label">Sincronizza</span>
+    </button>
+
+    <button type="button" class="rail-item" id="btn-export-csv" title="Esporta Riepilogo Excel">
+      <span class="rail-item-icon">⬇️</span>
+      <span class="rail-item-label">Esporta Excel</span>
+    </button>
+
+    <button type="button" class="rail-item hidden" id="btn-open-admin" title="Dashboard Amministratore">
+      <span class="rail-item-icon">⚙️</span>
+      <span class="rail-item-label">Admin Utenti</span>
+    </button>
+  </div>
+
+  <div class="rail-footer">
+    <div class="rail-sync-card" id="rail-sync-card">
+      <div id="sync-status" class="rail-sync-status">In attesa...</div>
+      <div id="sync-meta" class="rail-sync-meta">Ultimo agg.: -</div>
+    </div>
+    <button type="button" class="rail-item" id="btn-theme-toggle" title="Cambia Tema Chiaro / Scuro">
+      <span class="rail-item-icon" id="theme-toggle-icon">🌙</span>
+      <span class="rail-item-label" id="theme-toggle-label">Tema Scuro</span>
+    </button>
+  </div>
+</nav>
+
+<!-- 2. AREA PRINCIPALE -->
+<div class="workspace">
+  <header class="topbar">
+    <div class="top-left">
+      <button type="button" id="btn-new-task" class="btn-add">+ Nuovo Task</button>
+
+      <input type="search" id="f-search" class="top-search" placeholder="🔍 Cerca codice, oggetto, ATO...">
+
+      <div class="view-switch">
+        <button type="button" id="btn-view-list">Tabella</button>
+        <button type="button" id="btn-view-board" class="active">Kanban</button>
+        <button type="button" id="btn-view-cal">Calendario</button>
+        <button type="button" id="btn-view-stats">Statistiche</button>
+      </div>
+
+      <!-- Doppio raggruppamento Kanban: Per Stato / Per Sezione -->
+      <div class="view-switch" id="kanban-group-switch" title="Scegli come raggruppare le colonne Kanban">
+        <button type="button" id="btn-grp-status" class="active">Per Stato</button>
+        <button type="button" id="btn-grp-sec">Per Sezione</button>
+      </div>
+    </div>
+
+    <div class="top-right" id="topbar-filters">
+      <select id="f-sec" title="Filtra per sezione">
+        <option value="">Tutte le Sezioni</option>
+        <option value="NATO">NATO</option>
+        <option value="UE">UE</option>
+        <option value="ONU">ONU</option>
+        <option value="FOI">FOI</option>
+      </select>
+      <select id="f-tipo" title="Filtra per tipologia">
+        <option value="">Tipologie</option>
+        <option value="Appunto">Appunto</option>
+        <option value="Coordinazione">Coordinazione</option>
+        <option value="Briefing">Briefing</option>
+        <option value="Schede">Schede</option>
+        <option value="Flash Card">Flash Card</option>
+        <option value="Dossier">Dossier</option>
+        <option value="Altro">Altro</option>
+      </select>
+      <select id="f-dest" title="Filtra per livello approvativo">
+        <option value="">Approvatori</option>
+        <option value="CS">CS</option>
+        <option value="CU/VCU">CU/VCU</option>
+        <option value="VCR">VCR</option>
+        <option value="CR">CR</option>
+        <option value="SCa.SMD">SCa.SMD</option>
+        <option value="Ca.SMD">Ca.SMD</option>
+        <option value="UG">UG</option>
+        <option value="Altro">Altro</option>
+      </select>
+      <select id="f-status" title="Filtra per stato">
+        <option value="">Stati</option>
+        <option value="Da iniziare">Da iniziare</option>
+        <option value="In lavorazione">In lavorazione</option>
+        <option value="In verifica intermedia">In verifica</option>
+        <option value="Pronto per consegna">Pronto</option>
+        <option value="Completato">Completato</option>
+        <option value="Annullato">Annullato</option>
+      </select>
+      <select id="f-sort" title="Ordina pratiche">
+        <option value="due">Ordina: Scadenza</option>
+        <option value="code">Ordina: Codice</option>
+        <option value="status">Ordina: Stato</option>
+        <option value="prio">Ordina: Priorità</option>
+        <option value="ato">Ordina: ATO</option>
+      </select>
+      <button type="button" id="btn-toggle-completed" class="pill-ctrl completed-toggle is-hidden" title="Mostra o nascondi i completati">
+        <svg class="eye-icon eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M6.6 6.6A10.9 10.9 0 0 0 1.5 12s3.8 6.5 10.5 6.5a11 11 0 0 0 4.3-.9"/><path d="M9.9 5.2A11 11 0 0 1 12 5.5c6.7 0 10.5 6.5 10.5 6.5a12.4 12.4 0 0 1-2.7 3.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+        <svg class="eye-icon eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12S5.3 5.5 12 5.5 22.5 12 22.5 12 18.7 18.5 12 18.5 1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Completati</span><span class="done-count" id="btn-completed-count">0</span>
+      </button>
+
+      <button type="button" id="btn-notif-crit" class="notif-btn" title="Pratiche scadute o in scadenza ≤48h">
+        🔔<span class="notif-badge" id="notif-count">0</span>
+      </button>
+
+      <span class="user-chip" id="current-user-pill" title="Utente collegato">
+        <span class="user-av" id="user-av-initials">--</span>
+        <span id="user-name-lbl" class="hidden">-</span>
+      </span>
+      <button type="button" id="btn-logout" class="pill-ctrl" title="Cambia utente">Esci</button>
+    </div>
+  </header>
+
+  <main id="app-main">
+    <!-- VISTA KANBAN (PER STATO O PER SEZIONE) -->
+    <div id="view-board" class="kanban-board"></div>
+
+    <!-- VISTA TABELLA -->
+    <div id="view-list" class="hidden">
+      <table>
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="code">Codice ⇅</th>
+            <th class="sortable" data-sort="ato">ATO ⇅</th>
+            <th class="sortable" data-sort="due">Scadenza ⇅</th>
+            <th>Sez.</th>
+            <th>Tipologia</th>
+            <th class="sortable" data-sort="prio">Priorità ⇅</th>
+            <th>Classifica</th>
+            <th>Oggetto</th>
+            <th>Prot.</th>
+            <th>Inserimento</th>
+            <th>PCN Out/In</th>
+            <th class="sortable" data-sort="status">Stato ⇅</th>
+            <th>Approv.</th>
+            <th>Azioni</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <!-- VISTA CALENDARIO -->
+    <div id="view-cal" class="hidden">
+      <div class="cal-header">
+        <div class="cal-nav-group">
+          <button type="button" id="btn-prev-period" class="std-btn">◀ Prec.</button>
+          <button type="button" id="btn-cal-today" class="std-btn btn-primary">📍 Oggi</button>
+          <button type="button" id="btn-next-period" class="std-btn">Succ. ▶</button>
+        </div>
+        <h3 id="cal-title" style="letter-spacing:0.5px;"></h3>
+        <div class="cal-nav-group">
+          <button type="button" id="btn-cal-month" class="std-btn btn-active">Vista Mensile</button>
+          <button type="button" id="btn-cal-week" class="std-btn">Vista Settimanale</button>
+        </div>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </div>
+
+    <!-- VISTA STATISTICHE -->
+    <div id="view-stats" class="hidden">
+      <div class="stats-toolbar">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <h3 style="font-size:1.02rem;">📊 Punto di Situazione &amp; Statistiche Uff. OI</h3>
+          <select id="stats-year" class="pill-ctrl"></select>
+          <select id="stats-sec" class="pill-ctrl">
+            <option value="">Tutte le Sezioni (Ufficio OI)</option>
+            <option value="NATO">Sezione NATO</option>
+            <option value="UE">Sezione UE</option>
+            <option value="ONU">Sezione ONU</option>
+            <option value="FOI">Sezione FOI</option>
+          </select>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" id="btn-check-dups" class="std-btn btn-admin"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true" style="margin-right:6px;"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 5.2A2.5 2.5 0 0 0 13 3H6a2.5 2.5 0 0 0-2.5 2.5v7A2.5 2.5 0 0 0 6 15"/><path d="M11.5 14.5h6M11.5 18h6" stroke-linecap="round"/></svg>Controlla Duplicati</button>
+          <button type="button" id="btn-print-stats" class="std-btn btn-primary">🖨️ Stampa / PDF</button>
+        </div>
+      </div>
+
+      <div class="stats-kpi-grid" id="stats-kpis"></div>
+
+      <div class="stats-charts-grid">
+        <div class="chart-panel">
+          <div class="chart-title"><span>Andamento Mensile Pratiche</span><small>🟢 Completate &nbsp; 🔵 Attive</small></div>
+          <div class="month-chart" id="chart-monthly"></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title"><span>Carico per Sezione</span><small>NATO • UE • ONU • FOI</small></div>
+          <div class="donut-wrap" id="chart-sections"></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title"><span>Stato Pratiche (Workflow)</span><small>Distribuzione corrente</small></div>
+          <div class="hbar-list" id="chart-status"></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title"><span>Livelli Approvativi &amp; Tipologie</span><small>Catena di approvazione e tipologia atti</small></div>
+          <div class="split-2">
+            <div>
+              <div style="font-size:0.74rem; font-weight:700; color:var(--muted); margin-bottom:8px; text-transform:uppercase;">Livello Approvativo</div>
+              <div class="hbar-list" id="chart-approvers"></div>
+            </div>
+            <div>
+              <div style="font-size:0.74rem; font-weight:700; color:var(--muted); margin-bottom:8px; text-transform:uppercase;">Tipologia Documento</div>
+              <div class="hbar-list" id="chart-types"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- MODALE INSERIMENTO / MODIFICA TASK -->
+<div id="modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <h3 id="modal-title">Dettaglio Pratica / Task</h3>
+        <span id="modal-code-badge" class="code-badge">AUTO</span>
+      </div>
+      <span id="modal-readonly-tag" class="badge b-nosched hidden">🔒 SOLA LETTURA (Altra Sezione)</span>
+    </div>
+    <input type="hidden" id="t-id">
+    <input type="hidden" id="t-code">
+
+    <div id="modal-dup-warning" class="dup-warning-box hidden"></div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Codice Interno (Automatico)</label>
+        <input type="text" id="t-code-display" readonly style="opacity:0.85; font-family:ui-monospace,monospace; font-weight:700;">
+      </div>
+      <div class="form-group">
+        <label>Sezione *</label>
+        <select id="t-sec">
+          <option value="NATO">NATO</option>
+          <option value="UE">UE</option>
+          <option value="ONU">ONU</option>
+          <option value="FOI">FOI</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Tipologia Documento</label>
+        <select id="t-tipo">
+          <option value="Appunto">Appunto</option>
+          <option value="Coordinazione">Coordinazione</option>
+          <option value="Briefing">Briefing</option>
+          <option value="Schede">Schede</option>
+          <option value="Flash Card">Flash Card</option>
+          <option value="Dossier">Dossier</option>
+          <option value="Altro">Altro</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Oggetto *</label>
+      <textarea id="t-title" placeholder="Oggetto completo della pratica..."></textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Priorità di Trattazione</label>
+        <select id="t-prio">
+          <option value="Ordinario">Ordinario</option>
+          <option value="Urgente">Urgente</option>
+          <option value="Critica / Flash">Critica / Flash</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Classifica di Segretezza</label>
+        <select id="t-class">
+          <option value="Non Classificato">Non Classificato</option>
+          <option value="Uso Ufficiale / NATO Unclassified">Uso Ufficiale / NATO Unclassified</option>
+          <option value="Riservato / NATO Restricted">Riservato / NATO Restricted</option>
+          <option value="Riservatissimo / NATO Confidential">Riservatissimo / NATO Confidential</option>
+          <option value="Segreto / NATO Secret">Segreto / NATO Secret</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Livello Approvativo</label>
+        <select id="t-dest">
+          <option value="CS">CS (Capo Sezione)</option>
+          <option value="CU/VCU">CU/VCU (Capo/Vice Capo Uff.)</option>
+          <option value="VCR">VCR (Vice Capo Reparto)</option>
+          <option value="CR">CR (Capo Reparto)</option>
+          <option value="SCa.SMD">SCa.SMD</option>
+          <option value="Ca.SMD">Ca.SMD</option>
+          <option value="UG">UG (Ufficio Gabinetto)</option>
+          <option value="Altro">Altro</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Data Inserimento</label>
+        <input type="date" id="t-ins-date">
+      </div>
+      <div class="form-group">
+        <label>Consegna a Prot./PCN</label>
+        <input type="date" id="t-pcn-out">
+      </div>
+      <div class="form-group">
+        <label>Rientro da Prot./PCN</label>
+        <input type="date" id="t-pcn-in">
+      </div>
+    </div>
+
+    <div class="form-row modal-highlight-box">
+      <div class="form-group">
+        <label style="color:var(--today-text);">⏰ Scadenza Task (Consegna)</label>
+        <input type="date" id="t-date">
+      </div>
+      <div class="form-group">
+        <label style="color:var(--today-text);">Ora Scadenza</label>
+        <input type="time" id="t-time" value="12:00">
+      </div>
+      <div class="form-group">
+        <label>Stato Pratica</label>
+        <select id="t-status">
+          <option value="Da iniziare">Da iniziare</option>
+          <option value="In lavorazione">In lavorazione</option>
+          <option value="In verifica intermedia">In verifica intermedia</option>
+          <option value="Pronto per consegna">Pronto per consegna</option>
+          <option value="Completato">Completato</option>
+          <option value="Annullato">Annullato</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>N° ATO (Esterno / Riferimento)</label>
+        <input type="text" id="t-ato" placeholder="Es. 1, 2...">
+      </div>
+      <div class="form-group">
+        <label>N° Protocollo Ufficiale (Prot.)</label>
+        <input type="text" id="t-prot" placeholder="Es. 1809 o //">
+      </div>
+      <div class="form-group">
+        <label>Link / Percorso Allegato</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="t-link" placeholder="C:\... o \\Server\... o https://..." style="flex:1;">
+          <button type="button" id="btn-open-link" class="std-btn" title="Apri link, file o cartella" style="padding:0 12px; white-space:nowrap;">Apri</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Note Operative</label>
+      <textarea id="t-notes" placeholder="Annotazioni interne, punti di attenzione..."></textarea>
+    </div>
+
+    <!-- ULTIMA MODIFICA (visibile solo aprendo il task) -->
+    <div id="t-audit-box" class="audit-footer hidden"></div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; flex-wrap:wrap; gap:8px;">
+      <label style="font-size:0.81rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="t-mid-done"> Verifica intermedia (-7gg) effettuata
+      </label>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="btn-delete-in-modal" class="std-btn btn-danger hidden">🗑 Elimina</button>
+        <button type="button" id="btn-cancel-modal" class="std-btn">Chiudi</button>
+        <button type="button" id="btn-save-task" class="std-btn btn-primary">Salva Pratica</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODALE SCANSIONE DUPLICATI -->
+<div id="modal-dups" class="modal-backdrop hidden">
+  <div class="modal modal-wide">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3>🔍 Controllo Pratiche Duplicate nell'Archivio</h3>
+      <button type="button" id="btn-close-dups" class="std-btn">Chiudi</button>
+    </div>
+    <div style="font-size:0.81rem; color:var(--muted);">
+      Verifica automatica su <b>N° ATO (stessa sezione e anno)</b>, <b>N° Protocollo</b> e <b>Oggetto identico/simile</b>.
+    </div>
+    <div id="dups-list-container" style="display:flex; flex-direction:column; gap:10px; max-height:66vh; overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- MODALE LOG CRONOLOGIA -->
+<div id="modal-log" class="modal-backdrop hidden">
+  <div class="modal modal-wide">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h3>📜 Registro Cronologia Modifiche (Audit Log)</h3>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="btn-export-log-csv" class="std-btn btn-excel">⬇ Esporta Log CSV</button>
+        <button type="button" id="btn-close-log" class="std-btn">Chiudi</button>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input type="search" id="log-search" placeholder="Cerca per codice, utente, oggetto o dettaglio..." style="flex:1; min-width:200px;">
+      <select id="log-filter-sec">
+        <option value="">Sezioni</option>
+        <option value="NATO">NATO</option>
+        <option value="UE">UE</option>
+        <option value="ONU">ONU</option>
+        <option value="FOI">FOI</option>
+        <option value="ADMIN">ADMIN</option>
+      </select>
+      <select id="log-filter-action">
+        <option value="">Azioni</option>
+        <option value="CREATO">CREATO</option>
+        <option value="MODIFICATO">MODIFICATO</option>
+        <option value="SPOSTATO">SPOSTATO</option>
+        <option value="VERIFICA">VERIFICA</option>
+        <option value="ELIMINATO">ELIMINATO</option>
+        <option value="ADMIN">ADMIN</option>
+      </select>
+    </div>
+    <div style="overflow-y:auto; max-height:65vh; border:1px solid var(--border); border-radius:8px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Data / Ora</th>
+            <th>Utente</th>
+            <th>Sez.</th>
+            <th>Azione</th>
+            <th>Pratica / Codice</th>
+            <th>Dettagli Modifica</th>
+          </tr>
+        </thead>
+        <tbody id="log-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- MODALE DASHBOARD ADMIN UTENTI & MIGRAZIONE -->
+<div id="modal-admin" class="modal-backdrop hidden">
+  <div class="modal modal-wide">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3>⚙️ Dashboard Amministrazione — Gestione Utenti e Permessi</h3>
+      <button type="button" id="btn-close-admin" class="std-btn">Chiudi</button>
+    </div>
+
+    <div style="background:var(--surface-sub); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:10px;">
+      <div style="font-weight:700; font-size:0.86rem; color:var(--accent-text);">➕ Aggiungi Nuovo Utente</div>
+      <div class="form-row-4">
+        <div class="form-group">
+          <label>Nome / Grado e Cognome</label>
+          <input type="text" id="adm-name" placeholder="Es. Luongo">
+        </div>
+        <div class="form-group">
+          <label>Sezione di Competenza</label>
+          <select id="adm-sec">
+            <option value="NATO">NATO</option>
+            <option value="UE">UE</option>
+            <option value="ONU">ONU</option>
+            <option value="FOI">FOI</option>
+            <option value="TUTTE">TUTTE (Solo Admin)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ruolo</label>
+          <select id="adm-role">
+            <option value="user">Utente Sezione</option>
+            <option value="admin">Amministratore (Tutto)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>PIN Accesso</label>
+          <input type="text" id="adm-pin" placeholder="Es. 1234" value="1234">
+        </div>
+        <button type="button" id="btn-adm-add-user" class="std-btn btn-primary" style="height:34px;">Crea Utente</button>
+      </div>
+    </div>
+
+    <div style="overflow-y:auto; max-height:42vh; border:1px solid var(--border); border-radius:8px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Utente</th>
+            <th>Sezione</th>
+            <th>Ruolo / Permessi</th>
+            <th>PIN</th>
+            <th>Azioni</th>
+          </tr>
+        </thead>
+        <tbody id="admin-users-tbody"></tbody>
+      </table>
+    </div>
+
+    <div style="background:var(--surface-sub); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div style="font-size:0.8rem; color:var(--muted);">
+        <b style="color:var(--text);">Importazione Dati &amp; Backup</b><br>
+        Importa le pratiche da un file <b>CSV di backup</b> (<code>export_task_OI_*.csv</code>) oppure dal vecchio file Excel (<code>.xlsm</code>).
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" id="btn-admin-import-csv" class="std-btn btn-excel">📥 Importa Backup CSV</button>
+        <input type="file" id="csv-file" accept=".csv" class="hidden">
+        <button type="button" id="btn-admin-import-excel" class="std-btn btn-excel">📊 Importa Vecchio Excel (.xlsm)</button>
+        <input type="file" id="excel-file" accept=".xlsm,.xlsx" class="hidden">
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Script classici (non moduli ES): funzionano anche aprendo il file da rete o via file:// -->
+<script>
+  window.APP_MODE = 'admin_setup';
+  window.EXPECTED_DB_HINT = '';
+</script>
+<script src="assets/storage.js"></script>
+<script src="assets/views.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
