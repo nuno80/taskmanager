@@ -1477,6 +1477,16 @@ function initApp() {
     }
   });
 
+  // Chiusura con clic su sfondo esterno (backdrop)
+  document.querySelectorAll('.modal-backdrop').forEach(function(backdrop) {
+    backdrop.addEventListener('click', function(e) {
+      if (e.target === backdrop) {
+        if (backdrop.id === 'modal') closeModal();
+        else backdrop.classList.add('hidden');
+      }
+    });
+  });
+
   // Barra Laterale Unificata: Collassabile / Espandibile
   let savedRailExp = false;
   try { savedRailExp = localStorage.getItem(RAIL_STATE_KEY) === '1'; } catch (e) {}
