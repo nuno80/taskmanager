@@ -1,6 +1,6 @@
 /* =========================================================
-   app.js — Modali, controllo duplicati, migrazione Excel,
-   tema, eventi e Drag & Drop.
+   app.js — Modali, controllo conflitti ottimistico, duplicati,
+   migrazione Excel/CSV, tema, eventi e Drag & Drop sicuro.
    ========================================================= */
 
 /* -------------------------------------------------------------------------
@@ -40,8 +40,15 @@ function toggleRail() {
   setRailExpanded(rail ? rail.classList.contains('collapsed') : false);
 }
 
-// Drag & Drop: id della pratica attualmente trascinata
+// Stato Drag & Drop e versione caricata nel modale (controllo conflitti)
 let draggedTaskId = null;
+let editingTaskLoadedUpdatedAt = null;
+
+function addMonthsSafe(y, m, d, deltaMonths) {
+  const targetFirst = new Date(y, m + deltaMonths, 1);
+  const maxDay = new Date(targetFirst.getFullYear(), targetFirst.getMonth() + 1, 0).getDate();
+  return new Date(targetFirst.getFullYear(), targetFirst.getMonth(), Math.min(d, maxDay));
+}
 
 /* -------------------------------------------------------------------------
    DUPLICATI
@@ -91,8 +98,8 @@ function updateModalDuplicateWarning() {
   if (!dups.length) { box.classList.add('hidden'); box.innerHTML = ''; return []; }
   box.innerHTML = '<b>⚠️ Possibile duplicato rilevato:</b>' +
     dups.slice(0, 3).map(function(m) {
-      return '<div>• <span class="code-badge">' + escapeHtml(m.task.code || '-') + '</span> <b>[' + m.task.sec + ']</b> ' +
-             escapeHtml(m.task.title.slice(0, 80)) + ' <i>(' + escapeHtml(m.reasons.join(', ')) + ')</i></div>';
+      return '<div>• <span class="code-badge">' + escapeHtml(m.task.code || '-') + '</span> <b>[' + escapeHtml(m.task.sec) + ']</b> ' +
+             escapeHtml(String(m.task.title || '').slice(0, 80)) + ' <i>(' + escapeHtml(m.reasons.join(', ')) + ')</i></div>';
     }).join('');
   box.classList.remove('hidden');
   return dups;
@@ -120,9 +127,11 @@ function openDuplicatesModal() {
       return '<div class="dup-group"><div style="font-weight:700; font-size:0.84rem; color:#f97316;">⚠️ ' + escapeHtml(g.reason) + ' (' + g.items.length + ')</div>' +
         g.items.map(function(t) {
           const ed = canEditTask(t);
+          const safeSec = sanitizeSection(t.sec);
+          const safeId = escapeHtml(t.id);
           return '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 8px; background:var(--panel); border-radius:6px; border:1px solid var(--border); font-size:0.8rem;">' +
-            '<div style="min-width:0; flex:1;"><span class="code-badge">' + escapeHtml(t.code || '-') + '</span> <span class="sec-badge sec-' + t.sec + '">' + t.sec + '</span> <b>' + escapeHtml(t.title) + '</b> <small style="color:var(--muted);">[' + escapeHtml(t.status) + ']</small></div>' +
-            '<div style="display:flex; gap:5px;"><button type="button" class="std-btn" data-dup-action="edit" data-id="' + t.id + '">' + (ed ? '✏️ Apri' : '👁️') + '</button>' + (ed ? '<button type="button" class="std-btn btn-danger" data-dup-action="delete" data-id="' + t.id + '">🗑</button>' : '') + '</div></div>';
+            '<div style="min-width:0; flex:1;"><span class="code-badge">' + escapeHtml(t.code || '-') + '</span> <span class="sec-badge sec-' + safeSec + '">' + safeSec + '</span> <b>' + escapeHtml(t.title) + '</b> <small style="color:var(--muted);">[' + escapeHtml(t.status) + ']</small></div>' +
+            '<div style="display:flex; gap:5px;"><button type="button" class="std-btn" data-dup-action="edit" data-id="' + safeId + '">' + (ed ? '✏️ Apri' : '👁️') + '</button>' + (ed ? '<button type="button" class="std-btn btn-danger" data-dup-action="delete" data-id="' + safeId + '">🗑</button>' : '') + '</div></div>';
         }).join('') + '</div>';
     }).join('');
   }
@@ -130,7 +139,7 @@ function openDuplicatesModal() {
 }
 
 /* -------------------------------------------------------------------------
-   MODALE TASK
+   MODALE TASK & CONTROLLO CONFLITTI
    ------------------------------------------------------------------------- */
 function updateCodePreviewForNewTask() {
   if (document.getElementById('t-id').value) return;
@@ -146,6 +155,9 @@ function openModal(id) {
   const todayISO = toISODateLocal(new Date());
   const editable = t ? canEditTask(t) : true;
   const isAdmin = currentUser && currentUser.role === 'admin';
+  const curSecFilter = getActiveSectionFilter();
+
+  editingTaskLoadedUpdatedAt = t ? (t.updatedAt || null) : null;
 
   document.getElementById('modal-title').textContent = t ? 'Dettaglio Pratica' : 'Nuova Pratica / Task';
   document.getElementById('modal-readonly-tag').classList.toggle('hidden', editable);
@@ -155,7 +167,7 @@ function openModal(id) {
   document.getElementById('t-id').value = t ? t.id : '';
   document.getElementById('t-code').value = t ? (t.code || '') : '';
   document.getElementById('t-ato').value = t ? (t.ato || '') : '';
-  document.getElementById('t-sec').value = t ? t.sec : (isAdmin ? (activeSecFilter || 'NATO') : currentUser.sec);
+  document.getElementById('t-sec').value = t ? sanitizeSection(t.sec) : (isAdmin ? (curSecFilter || 'NATO') : sanitizeSection(currentUser.sec));
   document.getElementById('t-tipo').value = t ? (t.tipo || 'Appunto') : 'Appunto';
   document.getElementById('t-title').value = t ? t.title : '';
   document.getElementById('t-prio').value = t ? (t.prio || 'Ordinario') : 'Ordinario';
@@ -186,8 +198,8 @@ function openModal(id) {
   const auditBox = document.getElementById('t-audit-box');
   if (t && (t.updatedBy || t.createdBy)) {
     let html = '';
-    if (t.updatedBy) html += '<div>🕒 <b>Ultima modifica:</b> ' + escapeHtml(t.updatedBy) + ' — ' + formatTimestamp(t.updatedAt) + '</div>';
-    if (t.createdBy) html += '<div style="color:var(--muted); font-size:0.73rem;">Creato da: ' + escapeHtml(t.createdBy) + ' il ' + formatTimestamp(t.createdAt) + '</div>';
+    if (t.updatedBy) html += '<div>🕒 <b>Ultima modifica:</b> ' + escapeHtml(t.updatedBy) + ' — ' + escapeHtml(formatTimestamp(t.updatedAt)) + '</div>';
+    if (t.createdBy) html += '<div style="color:var(--muted); font-size:0.73rem;">Creato da: ' + escapeHtml(t.createdBy) + ' il ' + escapeHtml(formatTimestamp(t.createdAt)) + '</div>';
     auditBox.innerHTML = html;
     auditBox.classList.remove('hidden');
   } else {
@@ -198,7 +210,18 @@ function openModal(id) {
   document.getElementById('modal').classList.remove('hidden');
 }
 
-function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+function closeModal() {
+  editingTaskLoadedUpdatedAt = null;
+  document.getElementById('modal').classList.add('hidden');
+}
+
+function closeAllModals() {
+  ['modal', 'modal-dups', 'modal-log', 'modal-admin'].forEach(function(mid) {
+    const el = document.getElementById(mid);
+    if (el) el.classList.add('hidden');
+  });
+  editingTaskLoadedUpdatedAt = null;
+}
 
 let toastTimerId = null;
 function showToast(msg) {
@@ -213,7 +236,31 @@ function showToast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   if (toastTimerId) clearTimeout(toastTimerId);
-  toastTimerId = setTimeout(function() { el.classList.remove('show'); }, 3000);
+  toastTimerId = setTimeout(function() { el.classList.remove('show'); }, 3400);
+}
+
+// Copia negli appunti affidabile anche su file:// (fallback execCommand)
+async function copyTextReliable(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {}
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed; top:-9999px; left:-9999px; opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return Boolean(ok);
+  } catch (e) {
+    return false;
+  }
 }
 
 async function openOrCopyLink(rawLink) {
@@ -223,60 +270,95 @@ async function openOrCopyLink(rawLink) {
     return;
   }
 
-  // 1. Link Web (SharePoint, Intranet, HTTPS/HTTP): apertura diretta nel browser
+  // 1. Link Web (SharePoint, Intranet, HTTPS/HTTP): apertura diretta isolata
   if (/^https?:\/\//i.test(link)) {
-    window.open(link, '_blank');
+    window.open(link, '_blank', 'noopener,noreferrer');
     showToast('🌐 Link aperto in una nuova scheda');
     return;
   }
 
-  // Copia sempre negli appunti il percorso originale
-  try {
-    await navigator.clipboard.writeText(link);
-  } catch (err) {}
+  // Copia negli appunti il percorso originale (con fallback per file://)
+  const copied = await copyTextReliable(link);
+  const copySuffix = copied ? ' (percorso copiato)' : '';
 
-  // 2. Normalizzazione del percorso per i protocolli Windows
+  // 2. Normalizzazione del percorso e codifica URI sicura per spazi/caratteri speciali
   const cleanPath = link.replace(/^file:\/\/\/?/i, '').replace(/\//g, '\\');
-  const fileUrl = 'file:///' + cleanPath.replace(/\\/g, '/');
+  const encodedFileUrl = encodeURI('file:///' + cleanPath.replace(/\\/g, '/')).replace(/#/g, '%23');
 
-  // 3. Documenti Microsoft Office: apertura diretta in app desktop senza download
+  // 3. Documenti Microsoft Office: apertura diretta in app desktop
   if (/\.(docx?|docm)$/i.test(cleanPath)) {
-    window.location.href = 'ms-word:ofe|u|' + fileUrl;
-    showToast('📝 Apertura in Microsoft Word... (percorso copiato)');
+    window.location.href = 'ms-word:ofe|u|' + encodedFileUrl;
+    showToast('📝 Apertura in Microsoft Word...' + copySuffix);
     return;
   }
   if (/\.(xlsx?|xlsm|xlsb)$/i.test(cleanPath)) {
-    window.location.href = 'ms-excel:ofe|u|' + fileUrl;
-    showToast('📊 Apertura in Microsoft Excel... (percorso copiato)');
+    window.location.href = 'ms-excel:ofe|u|' + encodedFileUrl;
+    showToast('📊 Apertura in Microsoft Excel...' + copySuffix);
     return;
   }
   if (/\.(pptx?|pptm)$/i.test(cleanPath)) {
-    window.location.href = 'ms-powerpoint:ofe|u|' + fileUrl;
-    showToast('📑 Apertura in Microsoft PowerPoint... (percorso copiato)');
+    window.location.href = 'ms-powerpoint:ofe|u|' + encodedFileUrl;
+    showToast('📑 Apertura in Microsoft PowerPoint...' + copySuffix);
     return;
   }
 
-  // 4. Cartelle Windows / LAN: copia negli appunti e istruzioni rapide
-  const isFolder = !/\.[a-zA-Z0-9]{2,5}$/.test(cleanPath);
-  if (isFolder) {
-    try { window.location.href = 'search-ms:crumb=location:' + cleanPath; } catch (e) {}
-    showToast('📋 Percorso copiato! Premi Win+R e poi Invio per aprirla subito');
-    return;
+  // 4. Cartelle o file generici Windows / LAN: copia affidabile o prompt selezionabile
+  if (copied) {
+    showToast('📋 Percorso copiato! Premi Win+R → Ctrl+V → Invio per aprirlo subito');
+  } else {
+    prompt('Copia manualmente questo percorso (Ctrl+C):', link);
+  }
+}
+
+// Helper condiviso di verifica conflitto per salvataggi da modale, Kanban e Calendario
+async function verifyNoExternalConflict(taskId, expectedUpdatedAt, reopenOnCancel) {
+  if (!taskId || !expectedUpdatedAt) return true;
+  const res = await checkTaskConflict(taskId, expectedUpdatedAt);
+  if (!res.conflict) return true;
+
+  if (res.deleted) {
+    const overwriteDeleted = confirm(
+      '⚠️ Attenzione: questa pratica è stata ELIMINATA nel frattempo da un altro utente.\n\n' +
+      'Premi OK per salvarla di nuovo, oppure Annulla per ricaricare l\'archivio.'
+    );
+    if (!overwriteDeleted) {
+      await syncAllFromStorage(false, true);
+      if (reopenOnCancel) closeModal();
+      return false;
+    }
+    return true;
   }
 
-  // 5. File generici (es. PDF, archivi): copia il percorso
-  showToast('📋 Percorso copiato! Premi Win+R e poi Invio (o incolla in Esplora File)');
+  const who = res.diskTask.updatedBy || 'un altro utente';
+  const when = formatTimestamp(res.diskTask.updatedAt);
+  const overwrite = confirm(
+    '⚠️ Conflitto di modifica rilevato!\n\n' +
+    'Questa pratica è stata modificata nel frattempo da ' + who + ' il ' + when + '.\n\n' +
+    'Premi OK per SOVRASCRIVERE con le tue modifiche, oppure Annulla per ricaricare la versione aggiornata.'
+  );
+  if (!overwrite) {
+    await syncAllFromStorage(false, true);
+    if (reopenOnCancel) openModal(taskId);
+    return false;
+  }
+  return true;
 }
 
 async function saveTask() {
   const title = document.getElementById('t-title').value.trim();
   if (!title) { alert('Inserisci l\'Oggetto della pratica.'); return; }
-  const sec = document.getElementById('t-sec').value;
+  const sec = sanitizeSection(document.getElementById('t-sec').value);
   if (!canEditSection(sec)) { alert('Non hai i permessi per modificare la sezione ' + sec + '.'); return; }
 
   const existingId = document.getElementById('t-id').value;
   const oldTask = existingId ? tasks.find(function(x) { return x.id === existingId; }) : null;
   if (oldTask && !canEditTask(oldTask)) { alert('Accesso negato.'); return; }
+
+  // 1. Controllo conflitti ottimistico su disco prima di salvare modifiche esistenti
+  if (oldTask) {
+    const proceed = await verifyNoExternalConflict(existingId, editingTaskLoadedUpdatedAt, true);
+    if (!proceed) return;
+  }
 
   const dups = updateModalDuplicateWarning();
   if (dups.length > 0 && !confirm('Possibile duplicato rilevato (' + (dups[0].task.code || '') + ' — ' + dups[0].reasons.join(', ') + ').\n\nVuoi salvare comunque?')) return;
@@ -285,7 +367,7 @@ async function saveTask() {
   const userLabel = currentUser.name + ' (' + currentUser.sec + ')';
   const insDate = document.getElementById('t-ins-date').value || toISODateLocal(new Date());
   const id = existingId || ('TSK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5));
-  let code = (oldTask && oldTask.code) ? oldTask.code : await generateSafeAutoCode(sec, insDate.slice(0, 4));
+  const code = (oldTask && oldTask.code) ? oldTask.code : await generateSafeAutoCode(sec, insDate.slice(0, 4));
 
   const item = {
     id: id, code: code, ato: document.getElementById('t-ato').value.trim(), sec: sec,
@@ -305,22 +387,37 @@ async function saveTask() {
   const diffs = [];
   if (oldTask) {
     if (oldTask.status !== item.status) diffs.push('Stato: ' + oldTask.status + ' → ' + item.status);
-    if (oldTask.date !== item.date || oldTask.time !== item.time) diffs.push('Scadenza: ' + (oldTask.date||'-') + ' → ' + (item.date||'-') + ' ' + item.time);
+    if (oldTask.date !== item.date || oldTask.time !== item.time) diffs.push('Scadenza: ' + (oldTask.date || '-') + ' → ' + (item.date || '-') + ' ' + item.time);
     if (oldTask.dest !== item.dest) diffs.push('Approv.: ' + oldTask.dest + ' → ' + item.dest);
+    if (oldTask.sec !== item.sec) diffs.push('Sezione: ' + oldTask.sec + ' → ' + item.sec);
     if (oldTask.title !== item.title) diffs.push('Oggetto modificato');
-    tasks[tasks.findIndex(function(x) { return x.id === id; })] = item;
+  }
+
+  // Prepara lista aggiornata senza ancora mutare `tasks` finché la scrittura su disco non riesce
+  const nextTasks = tasks.slice();
+  if (oldTask) {
+    const idx = nextTasks.findIndex(function(x) { return x.id === id; });
+    if (idx >= 0) nextTasks[idx] = item;
+    else nextTasks.push(item);
   } else {
-    tasks.push(item);
+    nextTasks.push(item);
   }
 
   isSavingTask = true;
   try {
-    await saveSingleTask(item);
+    await saveSingleTask(item, nextTasks);
+    if (!oldTask) {
+      await ensureUniqueCodeOnDisk(item);
+    }
+    tasks = nextTasks;
     try {
       await appendAuditLog(oldTask ? 'MODIFICATO' : 'CREATO', item.sec, '[' + item.code + '] ' + item.title, oldTask ? (diffs.join(' | ') || 'Aggiornamento pratica') : ('Nuova pratica — ' + item.status));
     } catch (err) {
       console.warn('Errore scrittura log (non bloccante):', err);
     }
+  } catch (err) {
+    alert('Errore durante il salvataggio nell\'archivio: ' + err.message + '\n\nI dati inseriti nel modulo non sono stati persi: verifica la connessione alla cartella di rete e riprova.');
+    return;
   } finally {
     isSavingTask = false;
   }
@@ -328,20 +425,16 @@ async function saveTask() {
   if (hideCompleted && isClosedStatus(item.status)) hideCompleted = false;
 
   const filterNotes = [];
-  const secSelect = document.getElementById('f-sec');
-  if (secSelect && secSelect.value && secSelect.value !== item.sec) {
+  if (getActiveSectionFilter() && getActiveSectionFilter() !== item.sec) {
     filterNotes.push('sezione');
-    secSelect.value = '';
+    setActiveSectionFilter('');
   }
-  if (activeSecFilter && activeSecFilter !== item.sec) {
-    filterNotes.push('sezione');
-    activeSecFilter = '';
-  }
-  if (activeYearFilter && activeYearFilter !== getTaskYear(item)) {
+  if (activeYearFilter && !matchesYearFilter(item, activeYearFilter)) {
     filterNotes.push('anno');
     activeYearFilter = '';
   }
   if (filterNotes.length) showToast('Filtro ' + filterNotes.join(' e ') + ' azzerato per mostrare la pratica ' + (item.code || ''));
+  else showToast('✓ Pratica ' + (item.code || '') + ' salvata');
 
   populateYearLists();
   closeModal();
@@ -352,26 +445,34 @@ async function deleteTaskById(id) {
   const t = tasks.find(function(x) { return x.id === id; });
   if (!t || !canEditTask(t)) { alert('Puoi eliminare solo le pratiche della tua sezione.'); return; }
   if (!confirm('Eliminare definitivamente la pratica ' + (t.code || '') + '?')) return;
-  tasks = tasks.filter(function(x) { return x.id !== id; });
+
+  const nextTasks = tasks.filter(function(x) { return x.id !== id; });
   isSavingTask = true;
   try {
-    await deleteSingleTaskFile(id);
-    await appendAuditLog('ELIMINATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Pratica eliminata definitivamente');
+    await deleteSingleTaskFile(id, nextTasks);
+    tasks = nextTasks;
+    try {
+      await appendAuditLog('ELIMINATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Pratica eliminata definitivamente');
+    } catch (err) {
+      console.warn('Errore scrittura log (non bloccante):', err);
+    }
   } catch (err) {
-    console.warn('Errore scrittura log (non bloccante):', err);
+    alert('Impossibile eliminare il file dall\'archivio di rete: ' + err.message + '\n\nLa pratica è stata mantenuta.');
+    return;
   } finally {
     isSavingTask = false;
   }
   populateYearLists();
   closeModal();
   render();
+  showToast('🗑 Pratica ' + (t.code || '') + ' eliminata');
 }
 
 /* -------------------------------------------------------------------------
    LOG, ADMIN, CSV & MIGRAZIONE EXCEL
    ------------------------------------------------------------------------- */
 async function openLogModal() {
-  await syncAllFromStorage(true);
+  await syncAllFromStorage(true, false);
   renderLogTable();
   document.getElementById('modal-log').classList.remove('hidden');
 }
@@ -388,34 +489,63 @@ function renderLogTable() {
   });
   const tbody = document.getElementById('log-table-body');
   tbody.innerHTML = filtered.length ? filtered.slice(0, 300).map(function(l) {
-    return '<tr><td style="white-space:nowrap;">' + formatTimestamp(l.ts) + '</td><td><b>' + escapeHtml(l.user) + '</b> <small style="color:var(--muted)">(' + escapeHtml(l.userSec) + ')</small></td><td><span class="sec-badge sec-' + escapeHtml(l.sec) + '">' + escapeHtml(l.sec) + '</span></td><td><span class="log-action-badge la-' + escapeHtml(l.action) + '">' + escapeHtml(l.action) + '</span></td><td>' + escapeHtml(l.target) + '</td><td style="color:var(--text-soft);">' + escapeHtml(l.details) + '</td></tr>';
+    return '<tr><td style="white-space:nowrap;">' + escapeHtml(formatTimestamp(l.ts)) + '</td><td><b>' + escapeHtml(l.user) + '</b> <small style="color:var(--muted)">(' + escapeHtml(l.userSec) + ')</small></td><td><span class="sec-badge sec-' + escapeHtml(l.sec) + '">' + escapeHtml(l.sec) + '</span></td><td><span class="log-action-badge la-' + escapeHtml(l.action) + '">' + escapeHtml(l.action) + '</span></td><td>' + escapeHtml(l.target) + '</td><td style="color:var(--text-soft);">' + escapeHtml(l.details) + '</td></tr>';
   }).join('') : '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">Nessuna voce di log.</td></tr>';
 }
 
+// Protezione da CSV Formula Injection in Microsoft Excel
+function csvSafeCell(val) {
+  let s = String(val === undefined || val === null ? '' : val);
+  if (/^[=+\-@\t\r]/.test(s) && !/^-\d+(\.\d+)?$/.test(s)) {
+    s = "'" + s;
+  }
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
 function downloadCSV(filename, content) {
+  const url = URL.createObjectURL(new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' }));
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' }));
+  a.href = url;
   a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 }
 
 function exportTasksCSV() {
-  const headers = ['code','ato','insDate','tipo','sec','prio','classif','title','prot','pcnOut','pcnIn','status','dest','date','time','notes','updatedBy','updatedAt'];
+  const headers = ['code','ato','insDate','tipo','sec','prio','classif','title','prot','pcnOut','pcnIn','status','dest','date','time','link','midDone','notes','createdBy','createdAt','updatedBy','updatedAt'];
   const rows = [headers.join(';')];
-  tasks.forEach(function(t) { rows.push(headers.map(function(h) { return '"' + String(t[h] ?? '').replace(/"/g, '""') + '"'; }).join(';')); });
+  tasks.forEach(function(t) {
+    rows.push(headers.map(function(h) { return csvSafeCell(t[h] ?? ''); }).join(';'));
+  });
   downloadCSV('export_task_OI_' + toISODateLocal(new Date()) + '.csv', rows.join('\r\n'));
 }
 
 function exportLogCSV() {
   const rows = ['DataOra;Utente;SezioneUtente;SezionePratica;Azione;Pratica;Dettagli'];
   logs.forEach(function(l) {
-    rows.push([formatTimestamp(l.ts), l.user, l.userSec, l.sec, l.action, l.target, l.details].map(function(v) { return '"' + String(v||'').replace(/"/g,'""') + '"'; }).join(';'));
+    rows.push([formatTimestamp(l.ts), l.user, l.userSec, l.sec, l.action, l.target, l.details].map(csvSafeCell).join(';'));
   });
   downloadCSV('log_attivita_OI_' + toISODateLocal(new Date()) + '.csv', rows.join('\r\n'));
 }
 
+function syncAdminRoleAndSection() {
+  const roleEl = document.getElementById('adm-role');
+  const secEl = document.getElementById('adm-sec');
+  if (!roleEl || !secEl) return;
+  if (roleEl.value === 'admin') {
+    secEl.value = 'TUTTE';
+    secEl.disabled = true;
+  } else {
+    secEl.disabled = false;
+    if (secEl.value === 'TUTTE') secEl.value = 'NATO';
+  }
+}
+
 function openAdminModal() {
   if (!currentUser || currentUser.role !== 'admin') return;
+  syncAdminRoleAndSection();
   renderAdminUsers();
   document.getElementById('modal-admin').classList.remove('hidden');
 }
@@ -423,7 +553,8 @@ function openAdminModal() {
 function renderAdminUsers() {
   document.getElementById('admin-users-tbody').innerHTML = users.map(function(u) {
     const isSelf = currentUser && u.id === currentUser.id;
-    return '<tr><td><b>' + escapeHtml(u.name) + '</b>' + (isSelf ? ' <small style="color:var(--today-text);">(Tu)</small>' : '') + '</td><td><span class="sec-badge sec-' + escapeHtml(u.sec) + '">' + escapeHtml(u.sec) + '</span></td><td>' + (u.role === 'admin' ? '🛡️ Amministratore' : '👤 Utente (' + escapeHtml(u.sec) + ')') + '</td><td><code>' + escapeHtml(u.pin) + '</code></td><td style="white-space:nowrap;"><button type="button" class="std-btn" data-adm-action="reset-pin" data-uid="' + u.id + '">🔑 PIN</button> ' + (!isSelf ? '<button type="button" class="std-btn btn-danger" data-adm-action="del-user" data-uid="' + u.id + '">🗑</button>' : '') + '</td></tr>';
+    const safeUid = escapeHtml(u.id);
+    return '<tr><td><b>' + escapeHtml(u.name) + '</b>' + (isSelf ? ' <small style="color:var(--today-text);">(Tu)</small>' : '') + '</td><td><span class="sec-badge sec-' + escapeHtml(u.sec) + '">' + escapeHtml(u.sec) + '</span></td><td>' + (u.role === 'admin' ? '🛡️ Amministratore' : '👤 Utente (' + escapeHtml(u.sec) + ')') + '</td><td><code>' + escapeHtml(u.pin) + '</code></td><td style="white-space:nowrap;"><button type="button" class="std-btn" data-adm-action="reset-pin" data-uid="' + safeUid + '">🔑 PIN</button> ' + (!isSelf ? '<button type="button" class="std-btn btn-danger" data-adm-action="del-user" data-uid="' + safeUid + '">🗑</button>' : '') + '</td></tr>';
   }).join('');
 }
 
@@ -434,19 +565,22 @@ async function addAdminUser() {
   if (!name || !pin) { alert('Inserisci Nome e PIN.'); return; }
   if (role === 'admin') sec = 'TUTTE';
   else if (sec === 'TUTTE') { alert('Seleziona una delle 4 sezioni (NATO, UE, ONU, FOI).'); return; }
-  users.push({ id: 'USR-' + Date.now(), name: name, sec: sec, role: role, pin: pin });
-  await saveUsersToStorage();
-  await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + name, 'Creato utente (' + role + ' — ' + sec + ')');
+  const nextUser = { id: 'USR-' + Date.now(), name: name, sec: sec, role: role, pin: pin };
+  users.push(nextUser);
+  try {
+    await saveUsersToStorage();
+    await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + name, 'Creato utente (' + role + ' — ' + sec + ')');
+  } catch (err) {
+    users = users.filter(function(x) { return x.id !== nextUser.id; });
+    alert('Errore salvataggio utenti: ' + err.message);
+    return;
+  }
   document.getElementById('adm-name').value = '';
   renderAdminUsers();
 }
 
 function parseExcelDate(val) {
-  if (!val) return '';
-  const s = String(val).trim();
-  if (/^\d{5}(\.\d+)?$/.test(s)) return new Date((Math.floor(parseFloat(s)) - 25569) * 86400 * 1000).toISOString().slice(0, 10);
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  return m ? (m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0')) : '';
+  return normalizeDateInput(val);
 }
 
 async function extractZipEntries(arrayBuffer) {
@@ -467,9 +601,13 @@ async function extractZipEntries(arrayBuffer) {
       const dataStart = localHeaderOffset + 30 + lNameLen + lExtraLen, compData = bytes.subarray(dataStart, dataStart + compSize);
       if (method === 0) entries[name] = dec.decode(compData);
       else if (method === 8) {
-        const ds = new DecompressionStream('deflate-raw'), w = ds.writable.getWriter();
-        w.write(compData); w.close();
-        entries[name] = dec.decode(await new Response(ds.readable).arrayBuffer());
+        const ds = new DecompressionStream('deflate-raw');
+        // Lettura avviata in parallelo alla scrittura per evitare deadlock su fogli grandi
+        const outPromise = new Response(ds.readable).arrayBuffer();
+        const w = ds.writable.getWriter();
+        await w.write(compData);
+        await w.close();
+        entries[name] = dec.decode(await outPromise);
       }
     }
     cdOffset += 46 + nameLen + extraLen + commentLen;
@@ -493,7 +631,7 @@ async function handleAdminExcelMigration(e) {
       }
     }
     const extracted = [];
-    Object.keys(entries).forEach(function(k) {
+    Object.keys(entries).sort().forEach(function(k) {
       if (!k.startsWith('xl/worksheets/sheet')) return;
       const rowNodes = parser.parseFromString(entries[k], 'application/xml').getElementsByTagName('row');
       for (let r = 0; r < rowNodes.length; r++) {
@@ -509,7 +647,7 @@ async function handleAdminExcelMigration(e) {
           vals[colIdx] = val;
         }
         const sec = String(vals[3] || '').toUpperCase().trim();
-        if (['NATO', 'UE', 'ONU', 'FOI'].includes(sec) && vals[6] && String(vals[6]).toUpperCase() !== 'OGGETTO') {
+        if (VALID_SECTIONS.includes(sec) && vals[6] && String(vals[6]).toUpperCase() !== 'OGGETTO') {
           extracted.push({
             ato: String(vals[0] || '').trim(), insDate: parseExcelDate(vals[1]), tipo: String(vals[2] || '').trim() || 'Appunto',
             sec: sec, prio: String(vals[4] || '').trim() || 'Ordinario', classif: String(vals[5] || '').trim() || 'Non Classificato',
@@ -523,17 +661,25 @@ async function handleAdminExcelMigration(e) {
     e.target.value = '';
     if (!extracted.length) { alert('Nessuna riga valida trovata.'); return; }
     let added = 0; const nowISO = new Date().toISOString(), uLabel = currentUser.name + ' (Migrazione Excel)';
-    for (let i = 0; i < extracted.length; i++) {
-      const r = extracted[i];
-      if (!tasks.some(function(x) { return (r.ato && x.ato === r.ato && x.sec === r.sec) || (x.title.toLowerCase() === r.title.toLowerCase() && x.sec === r.sec); })) {
-        const item = Object.assign({
-          id: 'XL-' + Date.now() + '-' + i, code: computeNextCodeFromList(tasks, r.sec, r.insDate ? r.insDate.slice(0, 4) : String(new Date().getFullYear())),
-          date: '', time: '12:00', notes: '', link: '', midDone: false, createdBy: uLabel, createdAt: nowISO, updatedBy: uLabel, updatedAt: nowISO
-        }, r);
-        tasks.push(item); await saveSingleTask(item); added++;
+    isSavingTask = true;
+    try {
+      for (let i = 0; i < extracted.length; i++) {
+        const r = extracted[i];
+        if (!tasks.some(function(x) { return (r.ato && x.ato === r.ato && x.sec === r.sec) || (x.title.toLowerCase() === r.title.toLowerCase() && x.sec === r.sec); })) {
+          const item = Object.assign({
+            id: 'XL-' + Date.now() + '-' + i, code: computeNextCodeFromList(tasks, r.sec, r.insDate ? r.insDate.slice(0, 4) : String(new Date().getFullYear())),
+            date: '', time: '12:00', notes: '', link: '', midDone: false, createdBy: uLabel, createdAt: nowISO, updatedBy: uLabel, updatedAt: nowISO
+          }, r);
+          const nextList = tasks.concat([item]);
+          await saveSingleTask(item, nextList);
+          tasks = nextList;
+          added++;
+        }
       }
+      await appendAuditLog('ADMIN', 'ADMIN', 'Migrazione Excel', 'Importate ' + added + ' pratiche da ' + file.name);
+    } finally {
+      isSavingTask = false;
     }
-    await appendAuditLog('ADMIN', 'ADMIN', 'Migrazione Excel', 'Importate ' + added + ' pratiche da ' + file.name);
     populateYearLists(); render();
     alert('Migrazione completata: importate ' + added + ' pratiche.');
   } catch (err) { alert('Errore Excel: ' + err.message); }
@@ -582,6 +728,14 @@ function parseCSV(text) {
   return rows;
 }
 
+function unguardCsvCell(val) {
+  const s = String(val || '').trim();
+  if (s.length >= 2 && s[0] === "'" && /^[=+\-@]/.test(s[1])) {
+    return s.slice(1);
+  }
+  return s;
+}
+
 async function handleAdminCsvImport(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -600,7 +754,7 @@ async function handleAdminCsvImport(e) {
 
     function getVal(row, colName) {
       const idx = colIndex[colName.toLowerCase()];
-      return (idx !== undefined && row[idx] !== undefined) ? String(row[idx]).trim() : '';
+      return (idx !== undefined && row[idx] !== undefined) ? unguardCsvCell(row[idx]) : '';
     }
 
     let addedCount = 0;
@@ -615,14 +769,16 @@ async function handleAdminCsvImport(e) {
         const title = getVal(row, 'title') || getVal(row, 'oggetto');
         if (!title) continue;
 
-        let sec = (getVal(row, 'sec') || getVal(row, 'sezione') || 'NATO').toUpperCase();
-        if (!['NATO', 'UE', 'ONU', 'FOI'].includes(sec)) sec = 'NATO';
-
-        const insDate = getVal(row, 'insdate') || getVal(row, 'inserimento') || toISODateLocal(new Date());
+        const sec = sanitizeSection(getVal(row, 'sec') || getVal(row, 'sezione') || 'NATO');
+        const insDate = normalizeDateInput(getVal(row, 'insdate') || getVal(row, 'inserimento')) || toISODateLocal(new Date());
         let code = getVal(row, 'code') || getVal(row, 'codice');
         if (!code) {
           code = computeNextCodeFromList(tasks, sec, insDate ? insDate.slice(0, 4) : String(new Date().getFullYear()));
         }
+
+        const midRaw = (getVal(row, 'middone') || '').toLowerCase();
+        const midDoneParsed = (midRaw === 'true' || midRaw === '1' || midRaw === 'si' || midRaw === 'sì');
+        const hasMidCol = colIndex['middone'] !== undefined;
 
         const rowData = {
           code: code,
@@ -634,11 +790,11 @@ async function handleAdminCsvImport(e) {
           classif: getVal(row, 'classif') || getVal(row, 'classifica') || 'Non Classificato',
           title: title,
           prot: getVal(row, 'prot') || getVal(row, 'protocollo') || '//',
-          pcnOut: getVal(row, 'pcnout') || getVal(row, 'pcn out') || '',
-          pcnIn: getVal(row, 'pcnin') || getVal(row, 'pcn in') || '',
+          pcnOut: normalizeDateInput(getVal(row, 'pcnout') || getVal(row, 'pcn out')),
+          pcnIn: normalizeDateInput(getVal(row, 'pcnin') || getVal(row, 'pcn in')),
           status: getVal(row, 'status') || getVal(row, 'stato') || 'In lavorazione',
           dest: normalizeApprover(getVal(row, 'dest') || getVal(row, 'approvatore')),
-          date: getVal(row, 'date') || getVal(row, 'scadenza') || '',
+          date: normalizeDateInput(getVal(row, 'date') || getVal(row, 'scadenza')),
           time: getVal(row, 'time') || getVal(row, 'ora') || '12:00',
           notes: getVal(row, 'notes') || getVal(row, 'note') || '',
           link: getVal(row, 'link') || ''
@@ -651,24 +807,29 @@ async function handleAdminCsvImport(e) {
         if (existingIndex >= 0) {
           const existing = tasks[existingIndex];
           const updatedItem = Object.assign({}, existing, rowData, {
+            midDone: hasMidCol ? midDoneParsed : Boolean(existing.midDone),
+            link: rowData.link || existing.link || '',
             updatedBy: uLabel,
             updatedAt: nowISO
           });
-          tasks[existingIndex] = updatedItem;
-          await saveSingleTask(updatedItem);
+          const nextList = tasks.slice();
+          nextList[existingIndex] = updatedItem;
+          await saveSingleTask(updatedItem, nextList);
+          tasks = nextList;
           updatedCount++;
         } else {
           const newId = 'TSK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) + '-' + i;
           const newItem = Object.assign({
             id: newId,
-            midDone: false,
-            createdBy: getVal(row, 'updatedby') || uLabel,
-            createdAt: getVal(row, 'updatedat') || nowISO,
+            midDone: midDoneParsed,
+            createdBy: getVal(row, 'createdby') || getVal(row, 'updatedby') || uLabel,
+            createdAt: getVal(row, 'createdat') || getVal(row, 'updatedat') || nowISO,
             updatedBy: uLabel,
             updatedAt: nowISO
           }, rowData);
-          tasks.push(newItem);
-          await saveSingleTask(newItem);
+          const nextList = tasks.concat([newItem]);
+          await saveSingleTask(newItem, nextList);
+          tasks = nextList;
           addedCount++;
         }
       }
@@ -690,7 +851,6 @@ async function handleAdminCsvImport(e) {
 /* -------------------------------------------------------------------------
    AVVIO ED EVENT LISTENERS
    ------------------------------------------------------------------------- */
-// Pulsante ⚡ di riconnessione rapida: appare solo se c'è un handle in IndexedDB.
 async function refreshQuickReconnect() {
   const saved = await getSavedDirHandle();
   const step = document.getElementById('auth-step-folder');
@@ -720,6 +880,17 @@ function initApp() {
 
   document.getElementById('btn-theme-toggle').addEventListener('click', toggleTheme);
   document.getElementById('btn-theme-auth').addEventListener('click', toggleTheme);
+
+  // Chiusura rapida modali con tasto ESC
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      const anyOpen = ['modal', 'modal-dups', 'modal-log', 'modal-admin'].some(function(id) {
+        const el = document.getElementById(id);
+        return el && !el.classList.contains('hidden');
+      });
+      if (anyOpen) closeAllModals();
+    }
+  });
 
   // Barra Laterale Unificata: Collassabile / Espandibile
   let savedRailExp = false;
@@ -797,17 +968,29 @@ function initApp() {
   document.getElementById('btn-grp-status').addEventListener('click', function() { setKanbanGroup('status'); });
   document.getElementById('btn-grp-sec').addEventListener('click', function() { setKanbanGroup('sec'); });
 
-  // Filtro Sezioni in Topbar
+  // Filtro Sezioni in Topbar (mantiene sincronizzato activeSecFilter)
   const fSec = document.getElementById('f-sec');
-  if (fSec) fSec.addEventListener('change', render);
+  if (fSec) {
+    fSec.addEventListener('change', function() {
+      activeSecFilter = fSec.value;
+      render();
+    });
+  }
 
   document.getElementById('btn-notif-crit').addEventListener('click', function() {
     onlyCriticalFilter = !onlyCriticalFilter;
     render();
   });
+  const btnClearCrit = document.getElementById('btn-clear-crit');
+  if (btnClearCrit) {
+    btnClearCrit.addEventListener('click', function() {
+      onlyCriticalFilter = false;
+      render();
+    });
+  }
 
   document.getElementById('btn-new-task').addEventListener('click', function() { openModal(null); });
-  document.getElementById('btn-sync-now').addEventListener('click', function() { syncAllFromStorage(false); });
+  document.getElementById('btn-sync-now').addEventListener('click', function() { syncAllFromStorage(false, true); });
   document.getElementById('btn-open-log').addEventListener('click', openLogModal);
   document.getElementById('btn-close-log').addEventListener('click', function() { document.getElementById('modal-log').classList.add('hidden'); });
   document.getElementById('btn-export-log-csv').addEventListener('click', exportLogCSV);
@@ -838,6 +1021,7 @@ function initApp() {
 
   document.getElementById('btn-open-admin').addEventListener('click', openAdminModal);
   document.getElementById('btn-close-admin').addEventListener('click', function() { document.getElementById('modal-admin').classList.add('hidden'); });
+  document.getElementById('adm-role').addEventListener('change', syncAdminRoleAndSection);
   document.getElementById('btn-adm-add-user').addEventListener('click', addAdminUser);
   document.getElementById('btn-admin-import-csv').addEventListener('click', function() { document.getElementById('csv-file').click(); });
   document.getElementById('csv-file').addEventListener('change', handleAdminCsvImport);
@@ -851,9 +1035,31 @@ function initApp() {
     const u = users.find(function(x) { return x.id === uid; }); if (!u) return;
     if (act === 'reset-pin') {
       const p = prompt('Nuovo PIN per ' + u.name + ':', u.pin);
-      if (p && p.trim()) { u.pin = p.trim(); await saveUsersToStorage(); await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + u.name, 'PIN aggiornato'); renderAdminUsers(); }
+      if (p && p.trim()) {
+        const oldPin = u.pin;
+        u.pin = p.trim();
+        try {
+          await saveUsersToStorage();
+          await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + u.name, 'PIN aggiornato');
+          renderAdminUsers();
+        } catch (err) {
+          u.pin = oldPin;
+          alert('Errore salvataggio PIN: ' + err.message);
+        }
+      }
     } else if (act === 'del-user') {
-      if (confirm('Eliminare utente ' + u.name + '?')) { users = users.filter(function(x) { return x.id !== uid; }); await saveUsersToStorage(); await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + u.name, 'Utente rimosso'); renderAdminUsers(); }
+      if (confirm('Eliminare utente ' + u.name + '?')) {
+        const prevUsers = users.slice();
+        users = users.filter(function(x) { return x.id !== uid; });
+        try {
+          await saveUsersToStorage();
+          await appendAuditLog('ADMIN', 'ADMIN', 'Utente: ' + u.name, 'Utente rimosso');
+          renderAdminUsers();
+        } catch (err) {
+          users = prevUsers;
+          alert('Errore rimozione utente: ' + err.message);
+        }
+      }
     }
   });
 
@@ -864,28 +1070,52 @@ function initApp() {
     if (id) deleteTaskById(id);
   });
 
-  document.getElementById('btn-prev-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() - 7); else calDate.setMonth(calDate.getMonth() - 1); render(); });
-  document.getElementById('btn-next-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() + 7); else calDate.setMonth(calDate.getMonth() + 1); render(); });
+  document.getElementById('btn-prev-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() - 7); else calDate = addMonthsSafe(calDate.getFullYear(), calDate.getMonth(), 1, -1); render(); });
+  document.getElementById('btn-next-period').addEventListener('click', function() { if (calMode === 'week') calDate.setDate(calDate.getDate() + 7); else calDate = addMonthsSafe(calDate.getFullYear(), calDate.getMonth(), 1, 1); render(); });
   document.getElementById('btn-cal-today').addEventListener('click', function() { calDate = new Date(); render(); });
   document.getElementById('btn-cal-month').addEventListener('click', function() { calMode = 'month'; document.getElementById('btn-cal-month').classList.add('btn-active'); document.getElementById('btn-cal-week').classList.remove('btn-active'); render(); });
   document.getElementById('btn-cal-week').addEventListener('click', function() { calMode = 'week'; document.getElementById('btn-cal-week').classList.add('btn-active'); document.getElementById('btn-cal-month').classList.remove('btn-active'); render(); });
 
-  document.getElementById('f-search').addEventListener('input', render);
+  // Debounce 150ms sulla ricerca testuale
+  let searchDebounceTimer = null;
+  document.getElementById('f-search').addEventListener('input', function() {
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(render, 150);
+  });
   document.getElementById('f-tipo').addEventListener('change', render);
   document.getElementById('f-dest').addEventListener('change', render);
   document.getElementById('f-status').addEventListener('change', function() { if (isClosedStatus(this.value)) hideCompleted = false; render(); });
-  document.getElementById('f-sort').addEventListener('change', render);
+  document.getElementById('f-sort').addEventListener('change', function() { sortDirection = 'asc'; render(); });
   document.getElementById('btn-toggle-completed').addEventListener('click', function() {
     hideCompleted = !hideCompleted;
     if (hideCompleted && isClosedStatus(document.getElementById('f-status').value)) document.getElementById('f-status').value = '';
     render();
   });
 
+  // Ordinamento tabella bidirezionale (clic ripetuto inverte ASC/DESC)
   document.querySelectorAll('th.sortable').forEach(function(th) {
-    th.addEventListener('click', function() { document.getElementById('f-sort').value = th.getAttribute('data-sort'); render(); });
+    th.addEventListener('click', function() {
+      const sortEl = document.getElementById('f-sort');
+      const clickedSort = th.getAttribute('data-sort');
+      if (sortEl.value === clickedSort) {
+        sortDirection = (sortDirection === 'asc') ? 'desc' : 'asc';
+      } else {
+        sortEl.value = clickedSort;
+        sortDirection = 'asc';
+      }
+      render();
+    });
   });
 
-  // Drag & Drop su Kanban (cambia stato trascinando tra le colonne!)
+  // Gruppi di stati per evitare declassamenti accidentali nella stessa colonna Kanban
+  const KANBAN_STATUS_GROUPS = {
+    'Da iniziare': ['Da iniziare'],
+    'In lavorazione': ['In lavorazione'],
+    'In verifica intermedia': ['In verifica intermedia', 'Pronto per consegna'],
+    'Completato': ['Completato', 'Annullato']
+  };
+
+  // Drag & Drop su Kanban (Per Stato e, per Admin, Per Sezione)
   const boardEl = document.getElementById('view-board');
   boardEl.addEventListener('dragstart', function(e) {
     const card = e.target.closest('.k-card[data-task-id]');
@@ -895,44 +1125,103 @@ function initApp() {
     try { e.dataTransfer.setData('text/plain', draggedTaskId); } catch (err) {}
   });
   boardEl.addEventListener('dragover', function(e) {
-    const col = e.target.closest('.k-col[data-k-drop-status]');
-    if (!col || !draggedTaskId) return;
+    if (!draggedTaskId) return;
+    const col = e.target.closest('.k-col[data-k-drop-status]') ||
+                ((currentUser && currentUser.role === 'admin') ? e.target.closest('.k-col[data-k-drop-sec]') : null);
+    if (!col) return;
     e.preventDefault();
     boardEl.querySelectorAll('.k-col.drag-over').forEach(function(x) { if (x !== col) x.classList.remove('drag-over'); });
     col.classList.add('drag-over');
   });
   boardEl.addEventListener('dragleave', function(e) {
-    const col = e.target.closest('.k-col[data-k-drop-status]');
+    const col = e.target.closest('.k-col[data-k-drop-status], .k-col[data-k-drop-sec]');
     if (col && !col.contains(e.relatedTarget)) col.classList.remove('drag-over');
   });
   boardEl.addEventListener('drop', async function(e) {
-    const col = e.target.closest('.k-col[data-k-drop-status]');
+    const col = e.target.closest('.k-col[data-k-drop-status], .k-col[data-k-drop-sec]');
     boardEl.querySelectorAll('.k-col.drag-over').forEach(function(x) { x.classList.remove('drag-over'); });
     if (!col) return;
     e.preventDefault();
     const id = draggedTaskId; draggedTaskId = null;
     const t = tasks.find(function(x) { return x.id === id; });
+    if (!t || !canEditTask(t)) return;
+
     const newStatus = col.getAttribute('data-k-drop-status');
-    if (!t || !canEditTask(t) || !newStatus || t.status === newStatus) return;
-    const oldStatus = t.status;
-    t.status = newStatus;
-    t.updatedBy = currentUser.name + ' (' + currentUser.sec + ')';
-    t.updatedAt = new Date().toISOString();
-    isSavingTask = true;
-    try {
-      await saveSingleTask(t);
+    const newSec = col.getAttribute('data-k-drop-sec');
+
+    // Drop in modalità "Per Stato"
+    if (newStatus) {
+      const group = KANBAN_STATUS_GROUPS[newStatus] || [newStatus];
+      // Non modificare se la pratica appartiene già alla colonna di destinazione
+      if (group.includes(t.status)) return;
+
+      const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+      if (!proceed) return;
+
+      const oldStatus = t.status;
+      const updated = Object.assign({}, t, {
+        status: newStatus,
+        updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
+        updatedAt: new Date().toISOString()
+      });
+      const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
+      isSavingTask = true;
       try {
-        await appendAuditLog('MODIFICATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Kanban Stato: ' + oldStatus + ' → ' + newStatus);
+        await saveSingleTask(updated, nextTasks);
+        tasks = nextTasks;
+        try {
+          await appendAuditLog('MODIFICATO', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Kanban Stato: ' + oldStatus + ' → ' + newStatus);
+        } catch (err) {
+          console.warn('Errore scrittura log (non bloccante):', err);
+        }
       } catch (err) {
-        console.warn('Errore scrittura log (non bloccante):', err);
+        alert('Errore aggiornamento stato su archivio di rete: ' + err.message);
+        return;
+      } finally {
+        isSavingTask = false;
       }
-    } finally {
-      isSavingTask = false;
+      if (hideCompleted && isClosedStatus(newStatus)) {
+        showToast('✓ Pratica ' + (updated.code || '') + ' spostata in Completati (nascosta dal filtro Completati)');
+      }
+      render();
+      return;
     }
-    render();
+
+    // Drop in modalità "Per Sezione" (solo Admin)
+    if (newSec && currentUser && currentUser.role === 'admin') {
+      const safeSec = sanitizeSection(newSec);
+      if (t.sec === safeSec) return;
+      if (!confirm('Spostare la pratica ' + (t.code || '') + ' dalla sezione ' + t.sec + ' alla sezione ' + safeSec + '?')) return;
+
+      const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+      if (!proceed) return;
+
+      const oldSec = t.sec;
+      const updated = Object.assign({}, t, {
+        sec: safeSec,
+        updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
+        updatedAt: new Date().toISOString()
+      });
+      const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
+      isSavingTask = true;
+      try {
+        await saveSingleTask(updated, nextTasks);
+        tasks = nextTasks;
+        try {
+          await appendAuditLog('SPOSTATO', safeSec, '[' + (updated.code || '-') + '] ' + updated.title, 'Sezione: ' + oldSec + ' → ' + safeSec);
+        } catch (err) {}
+      } catch (err) {
+        alert('Errore cambio sezione su archivio di rete: ' + err.message);
+        return;
+      } finally {
+        isSavingTask = false;
+      }
+      showToast('✓ Pratica ' + (updated.code || '') + ' spostata in ' + safeSec);
+      render();
+    }
   });
 
-  // Drag & Drop su Calendario con supporto navigazione tra periodi/mesi
+  // Drag & Drop su Calendario con supporto navigazione sicura tra periodi/mesi
   let calNavHoverTimer = null;
   function bindCalNavDrag(btnEl, direction) {
     if (!btnEl) return;
@@ -948,7 +1237,7 @@ function initApp() {
           if (calMode === 'week') {
             calDate.setDate(calDate.getDate() + (direction * 7));
           } else {
-            calDate.setMonth(calDate.getMonth() + direction);
+            calDate = addMonthsSafe(calDate.getFullYear(), calDate.getMonth(), 1, direction);
           }
           render();
         }, 450);
@@ -978,30 +1267,45 @@ function initApp() {
       const t = tasks.find(function(x) { return x.id === id; });
       if (!t || !canEditTask(t)) return;
 
-      const curParts = (t.date || toISODateLocal(new Date())).split('-');
-      const dObj = new Date(parseInt(curParts[0], 10), parseInt(curParts[1], 10) - 1, parseInt(curParts[2], 10) || 1);
+      const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+      if (!proceed) return;
+
+      const curParts = (t.date || t.pcnIn || toISODateLocal(new Date())).split('-');
+      const baseY = parseInt(curParts[0], 10);
+      const baseM = parseInt(curParts[1], 10) - 1;
+      const baseD = parseInt(curParts[2], 10) || 1;
+      let dObj;
       if (calMode === 'week') {
-        dObj.setDate(dObj.getDate() + (direction * 7));
+        dObj = new Date(baseY, baseM, baseD + (direction * 7));
       } else {
-        dObj.setMonth(dObj.getMonth() + direction);
+        dObj = addMonthsSafe(baseY, baseM, baseD, direction);
       }
       const oldStr = (t.date || '-') + ' ' + (t.time || '12:00');
-      t.date = toISODateLocal(dObj);
-      calDate = new Date(dObj.getFullYear(), dObj.getMonth(), (calMode === 'week' ? dObj.getDate() : 1));
-      if (activeYearFilter && activeYearFilter !== String(dObj.getFullYear())) {
-        activeYearFilter = '';
-      }
-      t.updatedBy = currentUser.name + ' (' + currentUser.sec + ')';
-      t.updatedAt = new Date().toISOString();
+      const newDateStr = toISODateLocal(dObj);
+      const updated = Object.assign({}, t, {
+        date: newDateStr,
+        updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
+        updatedAt: new Date().toISOString()
+      });
+      const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
       isSavingTask = true;
       try {
-        await saveSingleTask(t);
+        await saveSingleTask(updated, nextTasks);
+        tasks = nextTasks;
         try {
-          await appendAuditLog('SPOSTATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Calendario nav: ' + oldStr + ' → ' + t.date + ' ' + (t.time || '12:00'));
+          await appendAuditLog('SPOSTATO', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Calendario nav: ' + oldStr + ' → ' + updated.date + ' ' + (updated.time || '12:00'));
         } catch (err) {}
+      } catch (err) {
+        alert('Errore spostamento pratica su archivio di rete: ' + err.message);
+        return;
       } finally {
         isSavingTask = false;
       }
+      calDate = new Date(dObj.getFullYear(), dObj.getMonth(), (calMode === 'week' ? dObj.getDate() : 1));
+      if (activeYearFilter && !matchesYearFilter(updated, activeYearFilter)) {
+        activeYearFilter = '';
+      }
+      populateYearLists();
       render();
     });
   }
@@ -1043,35 +1347,48 @@ function initApp() {
     const t = tasks.find(function(x) { return x.id === id; });
     const targetDate = dz.getAttribute('data-drop-date'), targetTime = dz.getAttribute('data-drop-time');
     if (!t || !canEditTask(t) || !targetDate) return;
-    const oldStr = (t.date || '-') + ' ' + (t.time || '12:00');
-    t.date = targetDate;
-    if (targetTime) t.time = targetTime; else if (!t.time) t.time = '12:00';
 
-    // Auto-navigazione: se il giorno appartiene a un altro mese/anno, porta calDate sul mese del giorno rilasciato
+    const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+    if (!proceed) return;
+
+    const oldStr = (t.date || '-') + ' ' + (t.time || '12:00');
+    const newTime = targetTime || t.time || '12:00';
+    const updated = Object.assign({}, t, {
+      date: targetDate,
+      time: newTime,
+      updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
+      updatedAt: new Date().toISOString()
+    });
+    const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
+
+    isSavingTask = true;
+    try {
+      await saveSingleTask(updated, nextTasks);
+      tasks = nextTasks;
+      try {
+        await appendAuditLog('SPOSTATO', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Calendario: ' + oldStr + ' → ' + updated.date + ' ' + updated.time);
+      } catch (err) {
+        console.warn('Errore scrittura log (non bloccante):', err);
+      }
+    } catch (err) {
+      alert('Errore salvataggio data calendario su archivio di rete: ' + err.message);
+      return;
+    } finally {
+      isSavingTask = false;
+    }
+
+    // Auto-navigazione se il giorno rilasciato appartiene a un altro mese
     const dp = targetDate.split('-');
     if (dp.length === 3) {
       const dropY = parseInt(dp[0], 10), dropM = parseInt(dp[1], 10) - 1;
       if (calDate.getFullYear() !== dropY || calDate.getMonth() !== dropM) {
         calDate = new Date(dropY, dropM, 1);
-        if (activeYearFilter && activeYearFilter !== String(dropY)) {
-          activeYearFilter = '';
-        }
+      }
+      if (activeYearFilter && !matchesYearFilter(updated, activeYearFilter)) {
+        activeYearFilter = '';
       }
     }
-
-    t.updatedBy = currentUser.name + ' (' + currentUser.sec + ')';
-    t.updatedAt = new Date().toISOString();
-    isSavingTask = true;
-    try {
-      await saveSingleTask(t);
-      try {
-        await appendAuditLog('SPOSTATO', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Calendario: ' + oldStr + ' → ' + t.date + ' ' + t.time);
-      } catch (err) {
-        console.warn('Errore scrittura log (non bloccante):', err);
-      }
-    } finally {
-      isSavingTask = false;
-    }
+    populateYearLists();
     render();
   });
 
@@ -1100,20 +1417,30 @@ function initApp() {
     } else if (action === 'mid-ok') {
       e.stopPropagation();
       if (!canEditTask(t)) return;
-      t.midDone = true;
-      t.updatedBy = currentUser.name + ' (' + currentUser.sec + ')';
-      t.updatedAt = new Date().toISOString();
+      const proceed = await verifyNoExternalConflict(t.id, t.updatedAt, false);
+      if (!proceed) return;
+      const updated = Object.assign({}, t, {
+        midDone: true,
+        updatedBy: currentUser.name + ' (' + currentUser.sec + ')',
+        updatedAt: new Date().toISOString()
+      });
+      const nextTasks = tasks.map(function(x) { return x.id === id ? updated : x; });
       isSavingTask = true;
       try {
-        await saveSingleTask(t);
+        await saveSingleTask(updated, nextTasks);
+        tasks = nextTasks;
         try {
-          await appendAuditLog('VERIFICA', t.sec, '[' + (t.code || '-') + '] ' + t.title, 'Verifica intermedia (-7gg) effettuata');
+          await appendAuditLog('VERIFICA', updated.sec, '[' + (updated.code || '-') + '] ' + updated.title, 'Verifica intermedia (-7gg) effettuata');
         } catch (err) {
           console.warn('Errore scrittura log (non bloccante):', err);
         }
+      } catch (err) {
+        alert('Errore aggiornamento verifica intermedia: ' + err.message);
+        return;
       } finally {
         isSavingTask = false;
       }
+      showToast('✓ Verifica intermedia confermata per ' + (updated.code || ''));
       render();
     } else if (action === 'open-link') {
       e.stopPropagation();
@@ -1127,8 +1454,6 @@ function initApp() {
       openOrCopyLink(document.getElementById('t-link').value.trim());
     });
   }
-
-  setInterval(function() { if (currentUser) render(); }, 60000);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initApp);

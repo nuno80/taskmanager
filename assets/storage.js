@@ -1,12 +1,14 @@
 /* =========================================================
    storage.js — Archivio condiviso (File System Access API),
-   file atomici JSON, utenti/PIN, audit log e utility sui dati.
+   file atomici JSON, sync incrementale, controllo conflitti,
+   utenti/PIN, audit log e utility sui dati.
    ========================================================= */
 
 const LOCAL_TASKS_KEY = 'OI_MULTI_TASKS_FALLBACK';
 const LOCAL_USERS_KEY = 'OI_MULTI_USERS_FALLBACK';
 const LOCAL_LOGS_KEY  = 'OI_MULTI_LOGS_FALLBACK';
 const THEME_KEY       = 'OI_THEME_PREF_V4';
+const VALID_SECTIONS  = ['NATO', 'UE', 'ONU', 'FOI'];
 const SEC_PREFIX      = { NATO: 'N', UE: 'U', ONU: 'O', FOI: 'F' };
 const SEC_COLORS      = { NATO: '#2563eb', UE: '#eab308', ONU: '#06b6d4', FOI: '#10b981' };
 const DB_SIGNATURE_FILE = 'db-config.json';
@@ -24,14 +26,49 @@ let isSyncing = false;
 let isSavingTask = false;
 let syncIntervalId = null;
 
+// Cache incrementale file pratiche: fileName -> { lastModified, size, task }
+const taskFileCache = new Map();
+let hasRenderedOnce = false;
+let lastMinuteRefresh = 0;
+
 /* -------------------------------------------------------------------------
    CODICE AUTOMATICO (N26-001) & UTILITY DATI
    ------------------------------------------------------------------------- */
+function sanitizeSection(val) {
+  const s = String(val || '').trim().toUpperCase();
+  return VALID_SECTIONS.includes(s) ? s : 'NATO';
+}
+
 function normalizeApprover(val) {
   const s = String(val || '').trim();
   if (!s) return 'CR';
   if (s.toUpperCase() === 'CR III') return 'CR';
   return s;
+}
+
+function normalizeDateInput(val) {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (!s) return '';
+  // ISO YYYY-MM-DD (anche con orario)
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    return iso[1] + '-' + iso[2].padStart(2, '0') + '-' + iso[3].padStart(2, '0');
+  }
+  // Formato italiano DD/MM/YYYY o DD-MM-YYYY
+  const it = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (it) {
+    return it[3] + '-' + it[2].padStart(2, '0') + '-' + it[1].padStart(2, '0');
+  }
+  // Seriale numerico Excel (es. 45678)
+  if (/^\d{4,5}(\.\d+)?$/.test(s)) {
+    const num = Math.floor(parseFloat(s));
+    if (num > 25569 && num < 80000) {
+      const dt = new Date((num - 25569) * 86400 * 1000);
+      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+    }
+  }
+  return '';
 }
 
 function getTaskYear(t) {
@@ -42,13 +79,21 @@ function getTaskYear(t) {
   return String(new Date().getFullYear());
 }
 
+function matchesYearFilter(t, yearStr) {
+  if (!yearStr) return true;
+  if (getTaskYear(t) === yearStr) return true;
+  if (t.date && /^\d{4}/.test(t.date) && t.date.slice(0, 4) === yearStr) return true;
+  return false;
+}
+
 function computeNextCodeFromList(taskList, sec, yearStr) {
-  const prefix = SEC_PREFIX[sec] || 'X';
+  const safeSec = sanitizeSection(sec);
+  const prefix = SEC_PREFIX[safeSec] || 'X';
   const yy = String(yearStr || new Date().getFullYear()).slice(-2);
   const regex = new RegExp('^' + prefix + yy + '-(\\d+)$');
   let maxNum = 0;
   taskList.forEach(function(t) {
-    if (t.code) {
+    if (t && t.code) {
       const m = String(t.code).match(regex);
       if (m) {
         const n = parseInt(m[1], 10);
@@ -61,7 +106,7 @@ function computeNextCodeFromList(taskList, sec, yearStr) {
 
 async function generateSafeAutoCode(sec, yearStr) {
   if (storageMode === 'fs' && tasksDirHandle) {
-    const freshList = [];
+    const freshList = tasks.slice();
     try {
       for await (const [name, handle] of tasksDirHandle.entries()) {
         if (handle.kind === 'file' && name.endsWith('.json')) {
@@ -77,10 +122,46 @@ async function generateSafeAutoCode(sec, yearStr) {
   return computeNextCodeFromList(tasks, sec, yearStr);
 }
 
+// Verifica anti-collisione post-scrittura su rete LAN: se due utenti hanno
+// creato lo stesso codice nello stesso istante, rigenera un nuovo codice libero.
+async function ensureUniqueCodeOnDisk(item) {
+  if (storageMode !== 'fs' || !tasksDirHandle || !item || !item.code) return item;
+  let collision = false;
+  const freshList = [];
+  try {
+    for await (const [name, handle] of tasksDirHandle.entries()) {
+      if (handle.kind === 'file' && name.endsWith('.json')) {
+        try {
+          const obj = JSON.parse(await (await handle.getFile()).text());
+          if (obj && obj.id) {
+            freshList.push(obj);
+            if (obj.id !== item.id && obj.code === item.code) {
+              collision = true;
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    if (collision) {
+      const yr = item.insDate ? item.insDate.slice(0, 4) : String(new Date().getFullYear());
+      item.code = computeNextCodeFromList(freshList, item.sec, yr);
+      await saveSingleTask(item);
+    }
+  } catch (e) {
+    console.warn('Controllo anti-collisione codice saltato:', e);
+  }
+  return item;
+}
+
 function backfillMissingCodes(taskList) {
+  const updated = [];
   taskList.forEach(function(t) {
-    if (!t.code) t.code = computeNextCodeFromList(taskList, t.sec || 'NATO', getTaskYear(t));
+    if (!t.code) {
+      t.code = computeNextCodeFromList(taskList, t.sec || 'NATO', getTaskYear(t));
+      updated.push(t);
+    }
   });
+  return updated;
 }
 
 function toISODateLocal(d) {
@@ -97,7 +178,7 @@ function formatTimestamp(iso) {
 
 function formatD(isoDate) {
   if (!isoDate) return '-';
-  const p = isoDate.split('-');
+  const p = String(isoDate).split('-');
   return p.length === 3 ? (p[2] + '/' + p[1] + '/' + p[0]) : isoDate;
 }
 
@@ -128,7 +209,12 @@ async function writeJsonFile(dirHandle, filename, data) {
 }
 
 async function deleteFileFromDir(dirHandle, filename) {
-  try { await dirHandle.removeEntry(filename); } catch (e) {}
+  try {
+    await dirHandle.removeEntry(filename);
+  } catch (e) {
+    if (e && e.name === 'NotFoundError') return;
+    throw e;
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -179,10 +265,15 @@ async function getSavedDirHandle() {
 function resetFsHandles() {
   storageMode = 'none';
   rootDirHandle = tasksDirHandle = logsDirHandle = null;
+  taskFileCache.clear();
+  hasRenderedOnce = false;
 }
 
 // Apre un handle già selezionato: sottocartelle, utenti, primo avvio, sync.
 async function enterFsMode(rootHandle) {
+  taskFileCache.clear();
+  hasRenderedOnce = false;
+
   if (!isAdminSetupMode()) {
     // Modalità utente: validazione preventiva e rigorosa, nessun file/cartella creato
     let valid = false;
@@ -228,7 +319,7 @@ async function enterFsMode(rootHandle) {
       const hint = (typeof window !== 'undefined' && window.EXPECTED_DB_HINT) ? (': ' + window.EXPECTED_DB_HINT) : '';
       throw new Error('Cartella non valida: archivio privo di utenti registrati. Seleziona la cartella corretta' + hint);
     }
-    await syncAllFromStorage(true);
+    await syncAllFromStorage(true, true);
     return false;
   }
 
@@ -256,7 +347,7 @@ async function enterFsMode(rootHandle) {
     });
   }
 
-  await syncAllFromStorage(true);
+  await syncAllFromStorage(true, true);
   return isFirstRun;
 }
 
@@ -292,7 +383,7 @@ async function initSharedFolder() {
   const errBox = document.getElementById('folder-error');
   errBox.classList.add('hidden');
   if (typeof window.showDirectoryPicker !== 'function') {
-    errBox.textContent = 'Browser non supportato per cartelle condivise. Usa Microsoft Edge o Chrome aggiornati.';
+    errBox.textContent = 'Browser non supportato o API cartelle locali bloccata dalle policy di sicurezza. Apri questo file con Microsoft Edge o Google Chrome aggiornati (fuori da finestre in incognito o sandbox).';
     errBox.classList.remove('hidden');
     return;
   }
@@ -312,6 +403,8 @@ async function initSharedFolder() {
 
 async function initLocalFallback() {
   storageMode = 'local';
+  taskFileCache.clear();
+  hasRenderedOnce = false;
   await loadUsersFromStorage();
   let isFirstRun = false;
   if (users.length === 0) {
@@ -319,7 +412,7 @@ async function initLocalFallback() {
     await saveUsersToStorage();
     isFirstRun = true;
   }
-  await syncAllFromStorage(true);
+  await syncAllFromStorage(true, true);
   showLoginStep('💻 Modalità Locale (Solo questo browser — non condiviso in rete)', isFirstRun);
 }
 
@@ -334,17 +427,65 @@ async function loadUsersFromStorage() {
 
 async function saveUsersToStorage() {
   if (storageMode === 'fs') await writeJsonFile(rootDirHandle, 'users.json', users);
-  else { try { localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users)); } catch (e) {} }
+  else { localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users)); }
 }
 
-async function saveSingleTask(taskObj) {
-  if (storageMode === 'fs') await writeJsonFile(tasksDirHandle, taskObj.id + '.json', taskObj);
-  else { try { localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks)); } catch (e) {} }
+// Lettura singolo file su disco per controllo conflitti ottimistico (Optimistic Locking)
+async function readSingleTaskFromStorage(taskId) {
+  if (!taskId) return null;
+  if (storageMode === 'fs' && tasksDirHandle) {
+    return await readJsonFile(tasksDirHandle, taskId + '.json');
+  }
+  if (storageMode === 'local') {
+    try {
+      const list = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
+      return list.find(function(x) { return x && x.id === taskId; }) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
 }
 
-async function deleteSingleTaskFile(taskId) {
-  if (storageMode === 'fs') await deleteFileFromDir(tasksDirHandle, taskId + '.json');
-  else { try { localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks)); } catch (e) {} }
+async function checkTaskConflict(taskId, expectedUpdatedAt) {
+  if (!taskId || !expectedUpdatedAt) return { conflict: false, diskTask: null };
+  const diskTask = await readSingleTaskFromStorage(taskId);
+  if (!diskTask) {
+    return { conflict: true, deleted: true, diskTask: null };
+  }
+  if (diskTask.updatedAt && diskTask.updatedAt !== expectedUpdatedAt) {
+    return { conflict: true, deleted: false, diskTask: diskTask };
+  }
+  return { conflict: false, deleted: false, diskTask: diskTask };
+}
+
+async function saveSingleTask(taskObj, nextTasksForLocal) {
+  if (storageMode === 'fs') {
+    const fname = taskObj.id + '.json';
+    await writeJsonFile(tasksDirHandle, fname, taskObj);
+    // Aggiorna la cache incrementale con i nuovi metadati del file appena scritto
+    try {
+      const fh = await tasksDirHandle.getFileHandle(fname);
+      const file = await fh.getFile();
+      taskFileCache.set(fname, { lastModified: file.lastModified, size: file.size, task: taskObj });
+    } catch (e) {
+      taskFileCache.delete(fname);
+    }
+  } else {
+    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks;
+    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(payload));
+  }
+}
+
+async function deleteSingleTaskFile(taskId, nextTasksForLocal) {
+  if (storageMode === 'fs') {
+    const fname = taskId + '.json';
+    await deleteFileFromDir(tasksDirHandle, fname);
+    taskFileCache.delete(fname);
+  } else {
+    const payload = Array.isArray(nextTasksForLocal) ? nextTasksForLocal : tasks;
+    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(payload));
+  }
 }
 
 async function appendAuditLog(action, sec, targetTitle, details) {
@@ -364,26 +505,67 @@ async function appendAuditLog(action, sec, targetTitle, details) {
   else { try { localStorage.setItem(LOCAL_LOGS_KEY, JSON.stringify(logs)); } catch (e) {} }
 }
 
-async function syncAllFromStorage(includeLogs) {
+async function syncAllFromStorage(includeLogs, forceRender) {
   if (isSyncing || isSavingTask) return;
+  // Non interrompere mai un Drag & Drop attivo
+  if (typeof draggedTaskId !== 'undefined' && draggedTaskId) return;
+
   isSyncing = true;
   const statusDot = document.getElementById('sync-status');
   const miniDot = document.getElementById('sync-dot-indicator');
   const syncBtn = document.getElementById('btn-sync-now');
+  let tasksChanged = Boolean(forceRender || !hasRenderedOnce);
+
   try {
     if (storageMode === 'fs') {
       await loadUsersFromStorage();
-      const loadedTasks = [];
+
+      // Sincronizzazione incrementale: rilegge e parsa solo i file aggiunti o modificati
+      const seenFiles = new Set();
       for await (const [name, handle] of tasksDirHandle.entries()) {
         if (handle.kind === 'file' && name.endsWith('.json')) {
+          seenFiles.add(name);
           try {
-            const obj = JSON.parse(await (await handle.getFile()).text());
-            if (obj && obj.id) { obj.dest = normalizeApprover(obj.dest); loadedTasks.push(obj); }
+            const file = await handle.getFile();
+            const cached = taskFileCache.get(name);
+            if (!cached || cached.lastModified !== file.lastModified || cached.size !== file.size) {
+              const obj = JSON.parse(await file.text());
+              if (obj && obj.id) {
+                obj.sec = sanitizeSection(obj.sec);
+                obj.dest = normalizeApprover(obj.dest);
+                taskFileCache.set(name, { lastModified: file.lastModified, size: file.size, task: obj });
+                tasksChanged = true;
+              }
+            }
           } catch (e) {}
         }
       }
-      backfillMissingCodes(loadedTasks);
+
+      // Rimuovi dalla cache i file eliminati esternamente da altri utenti
+      for (const cachedName of Array.from(taskFileCache.keys())) {
+        if (!seenFiles.has(cachedName)) {
+          taskFileCache.delete(cachedName);
+          tasksChanged = true;
+        }
+      }
+
+      const loadedTasks = [];
+      taskFileCache.forEach(function(entry) {
+        if (entry && entry.task) loadedTasks.push(entry.task);
+      });
+
+      const backfilled = backfillMissingCodes(loadedTasks);
       tasks = loadedTasks;
+
+      // Persisti eventuali codici generati ex-novo solo per pratiche modificabili dall'utente corrente
+      if (backfilled.length > 0 && currentUser) {
+        for (let i = 0; i < backfilled.length; i++) {
+          if (canEditTask(backfilled[i])) {
+            try { await saveSingleTask(backfilled[i]); } catch (e) {}
+          }
+        }
+      }
+
       if (includeLogs) {
         const loadedLogs = [];
         for await (const [name, handle] of logsDirHandle.entries()) {
@@ -401,19 +583,38 @@ async function syncAllFromStorage(includeLogs) {
       if (miniDot) miniDot.style.background = '#22c55e';
       if (syncBtn) syncBtn.title = 'Sincronizzato con rete: ' + rootDirHandle.name;
     } else {
-      try { tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]'); } catch (e) { tasks = []; }
-      tasks.forEach(function(t) { t.dest = normalizeApprover(t.dest); });
-      backfillMissingCodes(tasks);
+      let localList = [];
+      try { localList = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]'); } catch (e) { localList = []; }
+      localList.forEach(function(t) {
+        t.sec = sanitizeSection(t.sec);
+        t.dest = normalizeApprover(t.dest);
+      });
+      const backfilled = backfillMissingCodes(localList);
+      tasks = localList;
+      if (backfilled.length > 0) {
+        try { localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks)); } catch (e) {}
+      }
       if (includeLogs) { try { logs = JSON.parse(localStorage.getItem(LOCAL_LOGS_KEY) || '[]'); } catch (e) { logs = []; } }
       if (statusDot) { statusDot.textContent = '💻 Locale (Test)'; statusDot.style.color = '#fde047'; }
       if (miniDot) miniDot.style.background = '#eab308';
       if (syncBtn) syncBtn.title = 'Modalità Locale (Test)';
+      tasksChanged = true;
     }
 
     const metaEl = document.getElementById('sync-meta');
     if (metaEl) metaEl.textContent = 'Agg. ' + new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    populateYearLists();
-    if (currentUser) render();
+
+    // Aggiorna la UI solo se ci sono cambiamenti reali oppure al cambio minuto (per badge scadenze)
+    const curMinute = Math.floor(Date.now() / 60000);
+    const minuteTick = curMinute !== lastMinuteRefresh;
+    if (tasksChanged || minuteTick) {
+      lastMinuteRefresh = curMinute;
+      populateYearLists();
+      if (currentUser) {
+        hasRenderedOnce = true;
+        render();
+      }
+    }
   } catch (err) {
     if (statusDot) { statusDot.textContent = '⚠ Errore Sync'; statusDot.style.color = '#fca5a5'; }
     if (miniDot) miniDot.style.background = '#ef4444';
@@ -424,7 +625,7 @@ async function syncAllFromStorage(includeLogs) {
 }
 
 /* -------------------------------------------------------------------------
-   LOGIN & PERMESSI
+   LOGIN & PERMESSI (Gestione PIN invariata per piena retrocompatibilità)
    ------------------------------------------------------------------------- */
 function showLoginStep(infoHtml, isFirstRun) {
   document.getElementById('auth-step-folder').classList.add('hidden');
@@ -470,7 +671,8 @@ function performLogin() {
   document.getElementById('btn-open-admin').classList.toggle('hidden', u.role !== 'admin');
 
   if (syncIntervalId) clearInterval(syncIntervalId);
-  syncIntervalId = setInterval(function() { syncAllFromStorage(false); }, 15000);
+  syncIntervalId = setInterval(function() { syncAllFromStorage(false, false); }, 15000);
+  hasRenderedOnce = true;
   populateYearLists();
   render();
 }
